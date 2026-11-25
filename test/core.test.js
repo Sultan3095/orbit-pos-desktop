@@ -310,7 +310,7 @@ t('edit can change customer and payment split without touching items', () => {
 
 t('two cashiers run overlapping shifts without touching each other', () => {
   const { db, cash, sh, sale } = mk2(); const c2 = C.makeUser('C2', '1111', 'cashier'); db.users.push(c2); const sh2 = C.openShift(db, c2, 200);
-  throws(() => C.openShift(db, c2, 1), 'SHIFT_OPEN');
+  throws(() => C.openShift(db, c2, 1), 'SHIFT_ALREADY_OPEN');
   sale(1, [{ method: 'cash', amount: 10 }]); C.finalizeSale(db, { cart: { lines: [{ itemId: 'a', qty: 3, price: 10, group: '' }] }, payments: [{ method: 'cash', amount: 30 }], user: c2, shiftId: sh2.id });
   assert.strictEqual(C.shiftSummary(db, sh).expectedCash, 110); assert.strictEqual(C.shiftSummary(db, sh2).expectedCash, 230);
   C.closeShift(db, sh, 110, ''); assert.ok(!sh2.closedAt); assert.strictEqual(C.shiftSummary(db, sh2).expectedCash, 230);
