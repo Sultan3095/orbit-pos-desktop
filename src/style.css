@@ -40,3 +40,4 @@ input[type=checkbox]{width:auto}input[type=color]{padding:2px;height:38px}
 @media print{.side,#toasts{display:none}}
 
 .modal-b .row{margin-top:10px}.modal-b .grid3+.row,.modal-b .grid2+.row{margin-top:12px}
+.offers { margin: 8px 0; } .offers .tag { margin-inline-end: 4px; }

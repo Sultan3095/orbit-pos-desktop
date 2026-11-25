@@ -53,10 +53,10 @@ t('partial return pro-rata incl. discounts; restock; over-return blocked', () =>
   db.promos.push({ id: 'p', name: 'b2g3', type: 'bxgy', scope: { type: 'item', value: 'a' }, params: { buy: 2, get: 3 } });
   const s = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 5, 10)] }, payments: pay(20), user: u });
   assert.strictEqual(s.total, 20);
-  const r = C.finalizeReturn(db, s.id, [{ idx: 0, qty: 2 }], u, {});
+  const r = C.finalizeReturn(db, s.id, [{ idx: 0, qty: 2 }], u, { method: 'credit' });
   assert.strictEqual(r.refund, 8); assert.strictEqual(db.items[0].stock, 97);
-  assert.throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: 4 }], u, {}), /QTY_EXCEEDS/);
-  C.finalizeReturn(db, s.id, [{ idx: 0, qty: 3 }], u, {});
+  assert.throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: 4 }], u, { method: 'credit' }), /QTY_EXCEEDS/);
+  C.finalizeReturn(db, s.id, [{ idx: 0, qty: 3 }], u, { method: 'credit' });
   assert.throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, {}), /QTY_EXCEEDS/);
   assert.strictEqual(db.sales.filter((x) => x.type === 'return').reduce((t, x) => t + x.refund, 0), 20);
 });
@@ -146,4 +146,56 @@ t('weight barcode parse + EAN check + auto barcode unique', () => {
   const p = C.parseWeightBarcode(full, S); assert.ok(p); assert.strictEqual(p.weightKg, 1.25); assert.strictEqual(p.pluNum, '123');
   assert.strictEqual(C.parseWeightBarcode('1234567890128', S), null);
   const db = mk(); const a = C.autoBarcode(db); db.items.push({ barcode: a }); assert.notStrictEqual(C.autoBarcode(db), a); assert.strictEqual(a.length, 13); });
+
+// ---- exchange receipts, promo exchange-only, serial returns
+const mkx = () => { const db = mk(); db.promos.push(b2g3); db.settings.returnDays = 7; return db; };
+t('promo line: cash refund refused, exchange allowed, receipt valid for the configured window', () => {
+  const db = mkx(); const u = db.users[1]; const now = new Date('2026-03-01T10:00:00');
+  const s = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 5, 10)] }, payments: [{ method: 'cash', amount: 20 }], user: u }, now);
+  assert.ok(s.lines[0].exchangeOnly);
+  assert.throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, { method: 'cash' }, now), /PROMO_EXCHANGE_ONLY/);
+  const r = C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, { method: 'credit' }, now);
+  const rec = C.findExchangeReceipt(db, r.exchangeReceiptNo);
+  assert.strictEqual(rec.amount, 4); assert.strictEqual(rec.expiresOn, '2026-03-08'); assert.strictEqual(rec.status, 'open');
+  db.settings.returnDays = 30; const r2 = C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, { method: 'credit' }, now);
+  assert.strictEqual(C.findExchangeReceipt(db, r2.exchangeReceiptNo).expiresOn, '2026-03-31');
+  db.settings.returnDays = 0; const r3 = C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, { method: 'credit' }, now);
+  assert.strictEqual(C.findExchangeReceipt(db, r3.exchangeReceiptNo).expiresOn, '');
+});
+t('percent discount line refunds the discounted price in cash', () => {
+  const db = mkx(); const u = db.users[1];
+  const s = C.finalizeSale(db, { cart: { lines: [Object.assign(line('b', 'G1', 2, 5), { manualPct: 20 })] }, payments: [{ method: 'cash', amount: 20 }], user: u });
+  assert.ok(!s.lines[0].exchangeOnly);
+  const r = C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, { method: 'cash' }); assert.strictEqual(r.refund, 4);
+});
+t('exchange receipt: redeem in a sale, split leftover, single use, expiry', () => {
+  const db = mkx(); const u = db.users[1]; const now = new Date('2026-03-01T10:00:00');
+  const s = C.finalizeSale(db, { cart: { lines: [line('c', 'G2', 1, 30)] }, payments: [{ method: 'cash', amount: 30 }], user: u }, now);
+  const r = C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, { method: 'credit' }, now);
+  const no = r.exchangeReceiptNo;
+  const s2 = C.finalizeSale(db, { cart: { lines: [line('b', 'G1', 2, 5)] }, payments: [], exchangeReceiptNo: no, user: u }, new Date('2026-03-02T10:00:00'));
+  assert.strictEqual(s2.total, 10); assert.deepStrictEqual(s2.payments, [{ method: 'credit', amount: 10 }]); assert.strictEqual(s2.exchangeCredit.amount, 10);
+  const left = C.findExchangeReceipt(db, s2.newExchangeReceipt); assert.strictEqual(left.amount, 20); assert.strictEqual(left.expiresOn, '2026-03-08');
+  assert.throws(() => C.finalizeSale(db, { cart: { lines: [line('b', 'G1', 1, 5)] }, payments: [], exchangeReceiptNo: no, user: u }), /EXR_USED/);
+  assert.throws(() => C.finalizeSale(db, { cart: { lines: [line('b', 'G1', 1, 5)] }, payments: [], exchangeReceiptNo: left.no, user: u }, new Date('2026-03-09T10:00:00')), /EXR_EXPIRED/);
+  assert.throws(() => C.finalizeSale(db, { cart: { lines: [line('b', 'G1', 1, 5)] }, payments: [], exchangeReceiptNo: 'EXR-99999', user: u }), /EXR_MISSING/);
+  // dearer replacement: 20 credit + 5 cash for 25
+  const s3 = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10), line('b', 'G1', 1, 5)] }, payments: [{ method: 'cash', amount: 5 }], exchangeReceiptNo: left.no, user: u }, new Date('2026-03-03T10:00:00'));
+  assert.strictEqual(s3.total, 25); assert.ok(!s3.newExchangeReceipt);
+});
+t('exchange credit does not move drawer cash', () => {
+  const db = mkx(); const u = db.users[1]; const sh = C.openShift(db, u, 100, 'P');
+  const s = C.finalizeSale(db, { cart: { lines: [line('c', 'G2', 1, 30)] }, payments: [{ method: 'cash', amount: 30 }], user: u, shiftId: sh.id });
+  C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], u, { method: 'credit', shiftId: sh.id });
+  assert.strictEqual(C.shiftSummary(db, sh).expectedCash, 130);
+});
+t('a returned serial cannot be returned twice (duplicate-serial hole)', () => {
+  const db = mkx(); const u = db.users[1];
+  db.items.push({ id: 's', barcode: '999', name: 'Phone', group: 'G3', cost: 50, price: 100, stock: 3, serialTracked: true, serials: ['S1', 'S2', 'S3'], batches: [] });
+  const s = C.finalizeSale(db, { cart: { lines: [Object.assign(line('s', 'G3', 2, 100), { serials: ['S1', 'S2'] })] }, payments: [{ method: 'cash', amount: 200 }], user: u });
+  C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1, serials: ['S1'] }], u, {});
+  assert.throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1, serials: ['S1'] }], u, {}), /SERIAL_ALREADY_RETURNED/);
+  assert.throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1, serials: ['S3'] }], u, {}), /SERIAL_NOT_ON_SALE/);
+  C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1, serials: ['S2'] }], u, {});
+});
 console.log(n + ' passed');

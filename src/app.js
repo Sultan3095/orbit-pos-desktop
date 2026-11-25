@@ -173,6 +173,14 @@ function holdCart(silent) {
   App.db.held.push({ id: Core.uid('h'), ts: new Date().toISOString(), userId: App.user.id, cart: App.cart });
   App.cart = newCart(); save(); if (!silent) { toast(t('held')); Sell.renderCart(); }
 }
+function offersBar() {
+  const now = new Date();
+  const act = (App.db.promos || []).filter((p) => Core.promoActive(p, now));
+  if (!act.length) return '';
+  const sc = (p) => { const x = p.scope || { type: 'all' }; if (x.type === 'all') return ''; if (x.type === 'group') return ' (' + x.value + ')'; const it = App.db.items.find((i) => i.id === x.value); return it ? ' (' + it.name + ')' : ''; };
+  const txt = (p) => { const a = p.params || {}; if (p.type === 'bxgy') return t('buy') + ' ' + a.buy + ' ' + t('get') + ' ' + a.get + ((a.getPct != null && a.getPct < 100) ? ' (' + a.getPct + '%)' : ' ' + t('free')) + sc(p); if (p.type === 'percent' || p.type === 'invoice_pct') return esc(p.name) + ': -' + a.percent + '%' + sc(p); if (p.type === 'amount' || p.type === 'invoice_amt') return esc(p.name) + ': -' + money(a.amount) + sc(p); return a.qty + ' = ' + money(a.price) + sc(p); };
+  return '<div class="offers" id="offers"><b>' + t('activeOffers') + ':</b> ' + act.map((p) => '<span class="tag n">' + txt(p) + '</span>').join(' ') + '</div>';
+}
 const Sell = {
   calc() {
     const c = App.cart; const cust = c.customerId ? App.db.customers.find((x) => x.id === c.customerId) : null;
@@ -184,6 +192,7 @@ const Sell = {
     const sh = App.shift;
     m.innerHTML = '<div class="sell"><section class="left"><div class="bar"><input id="q" placeholder="' + t('scanOrSearch') + '" autocomplete="off" autofocus>' +
       '<button class="btn" id="s-held">' + t('held') + ' (' + App.db.held.length + ')</button><button class="btn" id="s-disp">🖥️</button></div>' +
+      offersBar() +
       (sh ? '' : '<div class="banner warn">' + t('noShift') + ' <button class="btn sm primary" id="s-open">' + t('openShift') + '</button></div>') +
       '<div id="results" class="results"></div></section><section class="right card"><div id="cart"></div></section></div>';
     this.renderCart(); this.showQuick();
@@ -312,7 +321,7 @@ const Sell = {
     if (!App.cart.lines.length) return;
     if (!App.shift) return openShiftModal();
     const r = this.calc(); if (r.total < 0) return;
-    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }];
+    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }];
     const quick = [r.total, 50, 100, 200, 500].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
     const cust = App.cart.customerId ? App.db.customers.find((x) => x.id === App.cart.customerId) : null;
     modal({ title: t('pay'), cls: 'wide', body: '<div class="paytot">' + t('total') + ': <b>' + money(r.total) + ' ' + esc(cur()) + '</b></div><div class="grid3">' + form(fields) + '</div>' +
@@ -320,7 +329,7 @@ const Sell = {
       (cust && App.db.settings.loyaltyEnabled ? '<label class="chk"><input type="checkbox" id="redeem"' + (App.cart.redeem ? ' checked' : '') + '> ' + t('redeemPoints', { n: cust.points || 0 }) + '</label>' : ''),
       buttons: [{ label: t('cancel') }, { label: t('completeSale'), cls: 'primary', onClick: (w) => doPay(w, fields) }], enter: 1,
       onOpen: (w) => {
-        const upd = () => { const v = readForm(w, fields); const paid = (v.cash || 0) + (v.card || 0) + (v.other || 0); const rem = Core.r2(r.total - paid);
+        const upd = () => { const v = readForm(w, fields); let cr = 0; try { if (v.xr) cr = Math.min(Core.checkExchangeReceipt(App.db, v.xr).amount, r.total); } catch (e) {} const paid = (v.cash || 0) + (v.card || 0) + (v.other || 0) + cr; const rem = Core.r2(r.total - paid);
           $('#paystat', w).innerHTML = rem > 0.004 ? '<span class="bad">' + t('remaining') + ': ' + money(rem) + '</span>' : '<span class="good">' + t('change') + ': ' + money(-rem) + '</span>'; };
         w.addEventListener('input', (e) => { if (e.target.id === 'redeem') { App.cart.redeem = e.target.checked; w.close(); Sell.renderCart(); Sell.pay(); return; } upd(); });
         w.addEventListener('click', (e) => { if (e.target.dataset.q) { $('[name=cash]', w).value = e.target.dataset.q; $('[name=card]', w).value = ''; $('[name=other]', w).value = ''; upd(); } if (e.target.hasAttribute('data-card-all')) { $('[name=card]', w).value = r.total; $('[name=cash]', w).value = ''; $('[name=other]', w).value = ''; upd(); } });
@@ -330,11 +339,12 @@ const Sell = {
 };
 async function doPay(w, fields) {
   const v = readForm(w, fields);
+  const xrNo = (v.xr || '').trim();
   const payments = [{ method: 'cash', amount: v.cash || 0 }, { method: 'card', amount: v.card || 0 }, { method: 'other', amount: v.other || 0 }].filter((p) => p.amount > 0);
   const c = App.cart; const r = Sell.calc(); const cust = c.customerId ? App.db.customers.find((x) => x.id === c.customerId) : null;
   try {
     const sale = Core.finalizeSale(App.db, { cart: { lines: c.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it.group, taxExempt: it.taxExempt }); }), invPct: c.invPct, invAmt: c.invAmt, redeemValue: r.redeemValue },
-      payments, user: App.user, shiftId: App.shift.id, customerId: c.customerId, customerName: cust ? cust.name : '', profileName: App.shift.profileName });
+      payments, exchangeReceiptNo: xrNo || undefined, user: App.user, shiftId: App.shift.id, customerId: c.customerId, customerName: cust ? cust.name : '', profileName: App.shift.profileName });
     if (c.approvedBy) sale.approvedBy = c.approvedBy;
     await save(true);
     App.cart = newCart(); Sell.renderCart();
@@ -383,6 +393,20 @@ function openShiftModal() {
 }
 
 // ---------- receipt ----------
+function barcodeSvg(text) {
+  try { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); JsBarcode(svg, text, { format: 'CODE128', height: 40, width: 1.5, displayValue: true, fontSize: 12, margin: 0 }); return svg.outerHTML; } catch (e) { return '<b>' + esc(text) + '</b>'; }
+}
+function exchangeBlock(doc, l, m) {
+  const no = doc.exchangeReceiptNo || doc.newExchangeReceipt; if (!no) return '';
+  const rec = (App.db.exchangeReceipts || []).find((x) => x.no === no); if (!rec) return '';
+  return '<div style="border:1px dashed #000;padding:3px;margin-top:4px"><h3>' + tr('rcExchange', l) + '</h3><p>' + barcodeSvg(rec.no) + '</p><table><tr><td>' + tr('rcValue', l) + '</td><td class="e"><b>' + m(rec.amount) + '</b></td></tr>' +
+    (rec.expiresOn ? '<tr><td>' + tr('rcValidUntil', l) + '</td><td class="e"><b>' + esc(rec.expiresOn) + '</b></td></tr>' : '') + '</table>' +
+    (rec.windowDays ? '<p class="sm">' + tr('rcWindow', l, { n: rec.windowDays }) + '</p>' : '') + '</div>';
+}
+function termsBlock(s) {
+  const a = (s.receiptTermsAr || '').trim(), e = (s.receiptTermsEn || '').trim(); if (!a && !e) return '';
+  return '<hr><div class="sm" style="white-space:pre-wrap">' + (a ? '<div dir="rtl">' + esc(a) + '</div>' : '') + (e ? '<div dir="ltr">' + esc(e) + '</div>' : '') + '</div>';
+}
 function receiptHTML(doc, l) {
   const s = App.db.settings; l = l || s.receiptLang; const rtl = l === 'ar'; const w = s.receiptWidth === 58 ? '54mm' : '76mm';
   const m = (n) => money(n, l); const isRet = doc.type === 'return';
@@ -391,10 +415,12 @@ function receiptHTML(doc, l) {
   return '<!doctype html><html dir="' + (rtl ? 'rtl' : 'ltr') + '" lang="' + l + '"><head><meta charset="utf-8"><style>@page{size:' + w + ' auto;margin:0}*{box-sizing:border-box}body{width:' + w + ';margin:0 auto;padding:3mm;font:12px/1.35 "Segoe UI",Tahoma,Arial,sans-serif;color:#000}h2,h3,p{margin:0;text-align:center}table{width:100%;border-collapse:collapse}td{padding:1px 0;vertical-align:top}.e{text-align:' + (rtl ? 'left' : 'right') + '}hr{border:0;border-top:1px dashed #000;margin:4px 0}.big{font-size:15px;font-weight:700}.sm{font-size:10px}</style></head><body>' +
     '<h2>' + esc(s.storeName) + '</h2>' + (s.storeAddress ? '<p class="sm">' + esc(s.storeAddress) + '</p>' : '') + (s.storePhone ? '<p class="sm">' + esc(s.storePhone) + '</p>' : '') + (s.taxNumber ? '<p class="sm">' + tr('taxNo', l) + ': ' + esc(s.taxNumber) + '</p>' : '') +
     '<hr><h3>' + tr(isRet ? 'rcReturn' : 'rcInvoice', l) + '</h3><table><tr><td>' + tr('rcNo', l) + '</td><td class="e">' + esc(doc.no) + '</td></tr><tr><td>' + tr('rcDate', l) + '</td><td class="e">' + new Date(doc.ts).toLocaleString(rtl ? locFor('ar') : 'en-GB') + '</td></tr><tr><td>' + tr('rcCashier', l) + '</td><td class="e">' + esc(doc.userName) + '</td></tr>' +
-    (isRet ? '<tr><td>' + tr('rcOrig', l) + '</td><td class="e">' + esc(doc.saleNo) + '</td></tr>' : '') + (doc.customerName ? '<tr><td>' + tr('customer', l) + '</td><td class="e">' + esc(doc.customerName) + '</td></tr>' : '') + '</table><hr>' +
+    (isRet ? '<tr><td>' + tr('rcOrig', l) + '</td><td class="e">' + esc(doc.saleNo) + '</td></tr>' : '') + '<tr><td>' + tr('customer', l) + '</td><td class="e">' + esc(doc.customerName || tr('rcCashCustomer', l)) + '</td></tr>' + '</table><hr>' +
     '<table>' + rows.map((r) => '<tr><td colspan="2"><b>' + esc(r.name) + '</b></td></tr><tr><td>' + (r.price != null ? r.qty + ' × ' + m(r.price) : r.qty) + (r.promo && r.promo.length ? ' <span class="sm">(' + esc(r.promo.join(', ')) + ')</span>' : '') + '</td><td class="e">' + m(r.total) + '</td></tr>').join('') + '</table><hr>' +
     (isRet ? '<table><tr class="big"><td>' + tr('rcRefund', l) + '</td><td class="e">' + m(doc.refund) + ' ' + esc(s.currency) + '</td></tr></table>' :
       '<table>' + (doc.lineDisc + doc.invoiceDisc > 0 ? '<tr><td>' + tr('rcSaved', l) + '</td><td class="e">' + m(doc.lineDisc + doc.invoiceDisc) + '</td></tr>' : '') + '<tr><td>' + tr('incl_tax', l) + '</td><td class="e">' + m(doc.tax) + '</td></tr><tr class="big"><td>' + tr('total', l) + '</td><td class="e">' + m(doc.total) + ' ' + esc(s.currency) + '</td></tr>' + pay + (doc.change > 0 ? '<tr><td>' + tr('change', l) + '</td><td class="e">' + m(doc.change) + '</td></tr>' : '') + '</table>') +
+    (doc.exchangeCredit ? '<table><tr><td>' + tr('rcCreditUsed', l) + ' ' + esc(doc.exchangeCredit.no) + '</td><td class="e">' + m(doc.exchangeCredit.amount) + '</td></tr></table>' : '') +
+    exchangeBlock(doc, l, m) + termsBlock(s) +
     '<hr><p>' + esc(s.receiptFooter || tr('rcThanks', l)) + '</p><p class="sm">' + esc(doc.no) + '</p></body></html>';
 }
 async function printReceipt(doc, l) {

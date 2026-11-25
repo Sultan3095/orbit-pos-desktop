@@ -66,7 +66,7 @@
       version: 1, settings: Core.defaultSettings(),
       users: [], items: [], customers: [], suppliers: [], promos: [],
       sales: [], purchases: [], shifts: [], held: [], audit: [],
-      counters: { sale: 0, purchase: 0, ret: 0 },
+      counters: { sale: 0, purchase: 0, ret: 0, exr: 0 }, exchangeReceipts: [],
     };
   };
 
@@ -247,6 +247,29 @@
   }
   Core.fefoAllocate = fefoAllocate;
 
+  // ---------- exchange receipts (credit notes) ----------
+  Core.addDays = function (iso, n) { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return Core.today(d); };
+  /** Valid-until date from the exchange window setting (returnDays). '' = no limit (window 0). */
+  Core.creditExpiry = function (issued, days) { return days > 0 ? Core.addDays(issued, days) : ''; };
+  Core.creditExpired = function (rec, now) { return !!rec.expiresOn && Core.today(now || new Date()) > rec.expiresOn; };
+  Core.issueExchangeReceipt = function (db, amount, info, now) {
+    now = now || new Date(); db.exchangeReceipts = db.exchangeReceipts || [];
+    db.counters.exr = (db.counters.exr || 0) + 1;
+    const issued = Core.today(now);
+    const rec = Object.assign({ id: Core.uid('exr'), no: 'EXR-' + String(db.counters.exr).padStart(5, '0'), amount: r2(amount), issuedOn: issued,
+      expiresOn: info.expiresOn != null ? info.expiresOn : Core.creditExpiry(issued, db.settings.returnDays), status: 'open', windowDays: db.settings.returnDays }, info);
+    db.exchangeReceipts.push(rec);
+    return rec;
+  };
+  Core.findExchangeReceipt = function (db, no) { return (db.exchangeReceipts || []).find((x) => x.no === String(no || '').trim().toUpperCase()); };
+  Core.checkExchangeReceipt = function (db, no, now) {
+    const rec = Core.findExchangeReceipt(db, no);
+    if (!rec) throw new Error('EXR_MISSING');
+    if (rec.status !== 'open') throw new Error('EXR_USED');
+    if (Core.creditExpired(rec, now)) throw new Error('EXR_EXPIRED');
+    return rec;
+  };
+
   // ---------- sales ----------
   Core.newInvoiceNo = function (db, kind) {
     const k = kind === 'return' ? 'ret' : kind;
@@ -265,6 +288,12 @@
     const cart = input.cart;
     if (!cart.lines.length) throw new Error('EMPTY_CART');
     const calc = Core.computeCart(cart, db.promos, s, now);
+    let xr = null, credit = 0;
+    if (input.exchangeReceiptNo) {
+      xr = Core.checkExchangeReceipt(db, input.exchangeReceiptNo, now);
+      credit = r2(Math.min(xr.amount, calc.total));
+      input = Object.assign({}, input, { payments: (input.payments || []).filter((p) => p.method !== 'credit').concat(credit > 0 ? [{ method: 'credit', amount: credit }] : []) });
+    }
     const paid = r2((input.payments || []).reduce((t, p) => t + (p.amount || 0), 0));
     const cash = r2((input.payments || []).filter((p) => p.method === 'cash').reduce((t, p) => t + p.amount, 0));
     const nonCash = r2(paid - cash);
@@ -316,6 +345,7 @@
         qty: l.qty, price: l.price, gross: l.gross, promoDisc: l.promoDisc, promoNames: l.promoNames,
         manualDisc: l.manualDisc, invShare: l.invShare, tax: l.tax, total: l.total, cost: it.cost || 0,
         serials: l.serials || [], alloc, unit: it.unit || '',
+        exchangeOnly: !!((l.promoNames && l.promoNames.length) || l.promoDisc > 0 || (calc.invoicePromoNames && calc.invoicePromoNames.length)),
       });
     });
     sale.cogs = cogs;
@@ -328,6 +358,12 @@
         c.points = r2(Math.max(0, c.points) + sale.pointsEarned);
         c.lastVisit = sale.ts;
       }
+    }
+    if (xr) {
+      xr.status = 'redeemed'; xr.redeemedIn = sale.no; xr.redeemedOn = Core.today(now);
+      sale.exchangeCredit = { no: xr.no, amount: credit };
+      const left = r2(xr.amount - credit);
+      if (left > 0.004) sale.newExchangeReceipt = Core.issueExchangeReceipt(db, left, { expiresOn: xr.expiresOn, customerName: xr.customerName || '', splitFrom: xr.no }, now).no;
     }
     db.sales.push(sale);
     return sale;
@@ -358,6 +394,8 @@
     const chk = Core.canReturn(db, sale, user, now);
     if (!chk.ok) throw new Error(chk.code);
     sale.returned = sale.returned || {};
+    sale.returnedSerials = sale.returnedSerials || [];
+    const method = opts.method || 'cash';
     let refund = 0, tax = 0;
     const lines = [];
     items.forEach((r) => {
@@ -365,16 +403,20 @@
       if (!l) throw new Error('LINE_MISSING');
       const left = Core.returnableQty(sale, r.idx);
       if (r.qty <= 0 || r.qty > left + 1e-9) throw new Error('QTY_EXCEEDS');
+      if (l.exchangeOnly && method !== 'credit') { const e = new Error('PROMO_EXCHANGE_ONLY'); e.item = l.name; throw e; }
       if (l.serials && l.serials.length) {
         const rs = r.serials || [];
         if (rs.length !== r.qty) throw new Error('SERIAL_COUNT');
         rs.forEach((sn) => { if (l.serials.indexOf(sn) < 0) throw new Error('SERIAL_NOT_ON_SALE'); });
+        if (new Set(rs).size !== rs.length) throw new Error('SERIAL_COUNT');
+        rs.forEach((sn) => { if (sale.returnedSerials.indexOf(sn) >= 0) { const e = new Error('SERIAL_ALREADY_RETURNED'); e.item = sn; throw e; } });
       }
       const ratio = r.qty / l.qty;
       const val = r2(l.total * ratio);
       const t = r2(l.tax * ratio);
       refund = r2(refund + val); tax = r2(tax + t);
       sale.returned[r.idx] = r2((sale.returned[r.idx] || 0) + r.qty);
+      if (r.serials) sale.returnedSerials = sale.returnedSerials.concat(r.serials);
       const it = db.items.find((x) => x.id === l.itemId);
       if (it && !it.service && r.restock !== false) {
         it.stock = r2((it.stock || 0) + r.qty);
@@ -396,12 +438,16 @@
       id: Core.uid('ret'), no: Core.newInvoiceNo(db, 'return'), ts: now.toISOString(), type: 'return',
       saleId: sale.id, saleNo: sale.no, originalProfile: sale.profileName || '', fromBranch: sale.profileName || '',
       returnedAtProfile: opts.profileName || '', userId: user.id, userName: user.name, shiftId: opts.shiftId || null,
-      reason: opts.reason || '', method: opts.method || 'cash', lines, refund, tax,
+      reason: opts.reason || '', method, lines, refund, tax, customerName: sale.customerName || '',
       lateOverride: !!chk.late, status: 'completed',
     };
     if (sale.customerId && db.settings.loyaltyEnabled) {
       const c = db.customers.find((x) => x.id === sale.customerId);
       if (c) c.points = r2(Math.max(0, (c.points || 0) - Math.floor(refund / (db.settings.loyaltyEarnPerCurrency || 10))));
+    }
+    if (method === 'credit') {
+      const rec = Core.issueExchangeReceipt(db, refund, { returnNo: ret.no, saleNo: sale.no, customerName: sale.customerName || '' }, now);
+      ret.exchangeReceiptNo = rec.no;
     }
     db.sales.push(ret);
     return ret;

@@ -83,7 +83,7 @@ app.whenReady().then(async () => {
     await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`);
     // 7. shift close
     await click('[data-nav=shift]'); await sleep(250); await shot('12-shift-ar');
-    await click('#sh-close'); await sleep(200); const exp = await ev(`return Core.shiftSummary(App.db, App.shift).expectedCash`); check('expected cash = 100+16-6.4', exp === 109.6, exp);
+    await click('#sh-close'); await sleep(200); const exp = await ev(`return Core.shiftSummary(App.db, App.shift).expectedCash`); check('expected cash = 100+16 (promo return was an exchange credit, drawer untouched)', exp === 116, exp);
     await setv('[name=counted]', 109.6); await modalBtn(1); await sleep(400);
     check('shift closed and Z printed', await ev(`return !App.shift && App.db.shifts[0].diff===0`) && printed.some((h) => h.includes('Z')) || printed.length > 0);
     // 8. reports
@@ -128,6 +128,41 @@ app.whenReady().then(async () => {
     await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`);
     // numerals setting: western digits by default in Arabic
     check('Arabic UI uses western digits by default', await ev(`return money(1234.5)==='1,234.50'`));
+
+    // 10b. exchange flow: promo lines are exchange only, receipt prints the configured window, redeem on the spot
+    await ev(`App.db.settings.returnDays=7; App.db.settings.receiptTermsAr='الاستبدال بشرط سلامة المنتج وإحضار الفاتورة'; App.db.settings.receiptTermsEn='Exchange with the original invoice, item unused.'; return 1`);
+    await click('[data-nav=sell]'); await sleep(300);
+    check('active offers shown on the sell screen', await ev(`return !!document.querySelector('#offers') && document.querySelector('#offers').textContent.length>5`)); await shot('30-sell-active-offers-ar');
+    await ev(`Sell.addItem(App.db.items.find(i=>i.barcode==='6222')); return 1`); await sleep(200);
+    await ev(`for(let i=0;i<4;i++) Sell.addItem(App.db.items.find(i=>i.barcode==='6222')); return 1`); await sleep(300);
+    await ev(`App.cart.customerId=null; Sell.renderCart(); return 1`);
+    await ev(`const c={id:'c1',name:'أحمد محمود',phone:'01012345678',points:0}; App.db.customers.push(c); App.cart.customerId='c1'; Sell.renderCart(); return 1`); await sleep(200);
+    await ev(`Sell.pay(); return 1`); await sleep(300); await setv('[name=cash]', 20); await shot('31-pay-with-exchange-field-ar');
+    await modalBtn(1); await sleep(400);
+    const sx = await ev(`const s=App.db.sales.filter(x=>x.type==='sale').slice(-1)[0]; return {id:s.id,no:s.no,ex:s.lines[0].exchangeOnly,cust:s.customerName,q:s.lines[0].qty}`);
+    check('sale with customer; promo line flagged exchange-only', sx.ex === true && sx.cust === 'أحمد محمود', JSON.stringify(sx));
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
+    await ev(`returnModal(App.db.sales.find(s=>s.id==='${sx.id}'), ()=>{}); return 1`); await sleep(400);
+    await setv('.rq[data-i="0"]', 1); await sleep(200); await shot('32-return-promo-exchange-only-ar');
+    check('refund method locked to exchange for a promo line', await ev(`const o=[...document.querySelector('[name=method]').options]; return document.querySelector('[name=method]').value==='credit' && o.filter(x=>x.disabled).length===3`));
+    await modalBtn(1); await sleep(400);
+    const rx = await ev(`const r=App.db.sales.filter(x=>x.type==='return').slice(-1)[0]; const e=Core.findExchangeReceipt(App.db,r.exchangeReceiptNo); return {no:r.exchangeReceiptNo, amount:e.amount, exp:e.expiresOn, days:e.windowDays}`);
+    check('exchange receipt issued: value = pro-rata paid, window = setting (7)', rx.no && rx.amount === 3.2 && rx.days === 7 && rx.exp, JSON.stringify(rx));
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
+    const html = await ev(`const r=App.db.sales.filter(x=>x.type==='return').slice(-1)[0]; return receiptHTML(r,'ar')`);
+    check('exchange receipt prints number, barcode, value, valid-until, window days, terms, customer', html.includes(rx.no) && html.includes('<svg') && html.includes('7') && html.includes(rx.exp) && html.includes('الاستبدال بشرط') && html.includes('أحمد محمود'));
+    await ev(`const f=document.createElement('iframe'); f.id='rcpt'; f.style.cssText='position:fixed;top:10px;left:50%;margin-left:-170px;width:340px;height:780px;background:#fff;z-index:99999;border:2px solid #333'; f.srcdoc=${JSON.stringify(html)}; document.body.appendChild(f); return 1`); await sleep(500); await shot('33-exchange-receipt-print-ar');
+    await ev(`document.getElementById('rcpt').remove(); return 1`);
+    // redeem on the spot: 10 credit-> new item
+    await ev(`App.cart=newCart(); Sell.addItem(App.db.items.find(i=>i.barcode==='6221')); return 1`); await sleep(300);
+    await ev(`Sell.pay(); return 1`); await sleep(300); await setv('[name=xr]', rx.no); await setv('[name=cash]', 15); await sleep(200); await shot('34-pay-with-exchange-credit-ar');
+    await modalBtn(1); await sleep(400);
+    check('exchange credit redeemed in the new sale and marked used', await ev(`const e=Core.findExchangeReceipt(App.db,'${rx.no}'); const s=App.db.sales.filter(x=>x.type==='sale').slice(-1)[0]; return e.status==='redeemed' && s.exchangeCredit && s.exchangeCredit.amount===3.2 && s.total===16`));
+    const html2 = await ev(`const s=App.db.sales.filter(x=>x.type==='sale').slice(-1)[0]; return receiptHTML(s,'ar')`);
+    check('sale receipt shows the credit used and the cash customer label', html2.includes(rx.no) && html2.includes('عميل نقدي'));
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
+    // used receipt rejected
+    check('a used exchange receipt is rejected', await ev(`try{Core.checkExchangeReceipt(App.db,'${rx.no}');return false}catch(e){return e.message==='EXR_USED'}`));
     // 11. persistence: data file on disk has the data
     const file = path.join(tmp, 'orbit-pos.json'); await ev(`await save(true); return 1`); await sleep(300);
     const disk = JSON.parse(fs.readFileSync(file, 'utf8')); check('data persisted to disk', disk.sales.length >= 2 && disk.items.length >= 4);
