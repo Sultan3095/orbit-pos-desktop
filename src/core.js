@@ -66,8 +66,46 @@
       version: 1, settings: Core.defaultSettings(),
       users: [], items: [], customers: [], suppliers: [], promos: [],
       sales: [], purchases: [], shifts: [], held: [], audit: [],
-      counters: { sale: 0, purchase: 0, ret: 0, exr: 0 }, exchangeReceipts: [],
+      counters: { sale: 0, purchase: 0, ret: 0, exr: 0 }, exchangeReceipts: [], edits: [],
     };
+  };
+
+  // ---------- roles & permissions ----------
+  // 3 roles. Each action is Y (allowed), A (needs a manager/system PIN) or N (not allowed). System manager is always Y and cannot be locked out.
+  Core.ROLES = ['cashier', 'manager', 'system'];
+  // [key, group, cashier, manager, system]
+  Core.PERMS = [
+    ['sell', 'selling', 'Y', 'Y', 'Y'], ['discountUpTo', 'selling', 'Y', 'Y', 'Y'], ['discountAbove', 'selling', 'A', 'Y', 'Y'], ['priceOverride', 'selling', 'N', 'Y', 'Y'], ['voidLine', 'selling', 'Y', 'Y', 'Y'], ['customers', 'selling', 'Y', 'Y', 'Y'],
+    ['returnInWindow', 'returns', 'Y', 'Y', 'Y'], ['returnAfterWindow', 'returns', 'A', 'Y', 'Y'], ['exchangeReceipt', 'returns', 'Y', 'Y', 'Y'], ['reprint', 'returns', 'Y', 'Y', 'Y'], ['editInvoice', 'returns', 'N', 'Y', 'Y'], ['voidInvoice', 'returns', 'N', 'Y', 'Y'],
+    ['shiftOwn', 'cash', 'Y', 'Y', 'Y'], ['cashMove', 'cash', 'Y', 'Y', 'Y'], ['cashOutAbove', 'cash', 'A', 'Y', 'Y'], ['seeExpected', 'cash', 'N', 'Y', 'Y'], ['viewOtherShifts', 'cash', 'N', 'Y', 'Y'], ['openDrawer', 'cash', 'N', 'Y', 'Y'],
+    ['viewItems', 'catalog', 'Y', 'Y', 'Y'], ['editItems', 'catalog', 'N', 'Y', 'Y'], ['seeCost', 'catalog', 'N', 'N', 'Y'], ['promos', 'catalog', 'N', 'Y', 'Y'], ['importPurchases', 'catalog', 'N', 'N', 'Y'], ['marginTool', 'catalog', 'N', 'N', 'Y'],
+    ['reports', 'admin', 'N', 'Y', 'Y'], ['logs', 'admin', 'N', 'Y', 'Y'], ['approve', 'admin', 'N', 'Y', 'Y'], ['settings', 'admin', 'N', 'N', 'Y'], ['users', 'admin', 'N', 'N', 'Y'], ['backup', 'admin', 'N', 'N', 'Y'],
+  ];
+  Core.LOCKED_PERMS = ['settings', 'users', 'backup']; // always on for the system manager so the owner cannot lock himself out
+  Core.defaultPermissions = function () {
+    const out = { cashier: {}, manager: {}, system: {} };
+    Core.PERMS.forEach((p) => { out.cashier[p[0]] = p[2]; out.manager[p[0]] = p[3]; out.system[p[0]] = p[4]; });
+    return out;
+  };
+  /** 'Y' | 'A' | 'N' for this user and action. Unknown actions are denied. */
+  Core.perm = function (db, user, key) {
+    if (!user) return 'N';
+    if (user.role === 'system') return Core.PERMS.some((p) => p[0] === key) ? 'Y' : 'N';
+    const def = Core.PERMS.find((p) => p[0] === key); if (!def) return 'N';
+    const set = db && db.settings && db.settings.permissions && db.settings.permissions[user.role];
+    const v = set && set[key]; if (v === 'Y' || v === 'A' || v === 'N') return v;
+    return user.role === 'manager' ? def[3] : def[2];
+  };
+  Core.can = (db, user, key) => Core.perm(db, user, key) === 'Y';
+  /** who may approve something by PIN: an active user whose role has the 'approve' switch on */
+  Core.isApprover = (db, u) => !!u && u.active !== false && Core.can(db, u, 'approve');
+  /** existing installs: make sure there is a System manager (promote the first manager) and fill missing permission switches */
+  Core.upgradeRoles = function (db) {
+    const s = db.settings; s.permissions = s.permissions || {}; const def = Core.defaultPermissions();
+    Core.ROLES.forEach((r) => { s.permissions[r] = Object.assign({}, def[r], s.permissions[r] || {}); });
+    let promoted = null;
+    if (db.users.length && !db.users.some((u) => u.role === 'system' && u.active !== false)) { const m = db.users.find((u) => u.role === 'manager' && u.active !== false); if (m) { m.role = 'system'; promoted = m.name; } }
+    return promoted;
   };
 
   // ---------- users / PIN ----------
@@ -404,8 +442,9 @@
     if (sale.status === 'voided') return { ok: false, code: 'VOIDED' };
     const days = (now - new Date(sale.ts)) / 86400000;
     if (db.settings.returnDays > 0 && days > db.settings.returnDays) { // 0 = no limit (same meaning as on the exchange receipt)
-      if (user.role === 'manager' && db.settings.managerBypassReturnWindow) return { ok: true, late: true };
-      return { ok: false, code: 'WINDOW', needManager: true };
+      const pm = Core.perm(db, user, 'returnAfterWindow');
+      if (pm === 'Y' && (user.role === 'system' || db.settings.managerBypassReturnWindow)) return { ok: true, late: true };
+      return { ok: false, code: pm === 'N' ? 'WINDOW_BLOCKED' : 'WINDOW', needManager: pm !== 'N' };
     }
     return { ok: true };
   };
@@ -438,7 +477,7 @@
       const val = r2(l.total * ratio);
       const t = r2(l.tax * ratio);
       refund = r2(refund + val); tax = r2(tax + t);
-      sale.returned[r.idx] = r2((sale.returned[r.idx] || 0) + r.qty);
+      sale.returned[r.idx] = r2((sale.returned[r.idx] || 0) + r.qty); Core.touchSale(db, sale);
       if (r.serials) sale.returnedSerials = sale.returnedSerials.concat(r.serials);
       const it = db.items.find((x) => x.id === l.itemId);
       if (it && !it.service && r.restock !== false) {
@@ -477,9 +516,10 @@
   };
 
   Core.voidSale = function (db, saleId, user, reason) {
-    if (user.role !== 'manager') throw new Error('MANAGER_ONLY');
+    if (!Core.can(db, user, 'voidInvoice')) throw new Error('MANAGER_ONLY');
     const sale = db.sales.find((x) => x.id === saleId && x.type === 'sale');
     if (!sale) throw new Error('SALE_MISSING');
+    { const sh = sale.shiftId && db.shifts.find((x) => x.id === sale.shiftId); if (sh && sh.closedAt) throw new Error('VOID_CLOSED_SHIFT'); } // closed shift: use Edit invoice, never a void
     if (sale.status === 'voided') throw new Error('VOIDED');
     if (Object.keys(sale.returned || {}).length) throw new Error('HAS_RETURNS');
     sale.lines.forEach((l) => {
@@ -501,9 +541,111 @@
         used.status = 'open'; delete used.redeemedIn; delete used.redeemedOn;
       }
     }
+    Core.touchSale(db, sale);
     sale.status = 'voided'; sale.voidReason = reason || ''; sale.voidBy = user.name; sale.voidTs = new Date().toISOString();
     return sale;
   };
+
+
+  // ---------- edit an invoice (revision, never an overwrite) ----------
+  const clone = (o) => JSON.parse(JSON.stringify(o));
+  const cashNet = (x) => r2((x.payments || []).filter((p) => p.method === 'cash').reduce((t, p) => t + p.amount, 0) - (x.change || 0));
+  const snapshot = (x) => ({ lines: clone(x.lines), gross: x.gross, lineDisc: x.lineDisc, invoiceDisc: x.invoiceDisc, subtotal: x.subtotal, tax: x.tax, total: x.total, cogs: x.cogs, payments: clone(x.payments), paid: x.paid, change: x.change, customerId: x.customerId || null, customerName: x.customerName || '', pointsEarned: x.pointsEarned || 0 });
+  Core.editBlockers = function (db, sale) {
+    const r = [];
+    if (!sale || sale.type !== 'sale') return ['NOT_A_SALE'];
+    if (sale.status === 'voided') r.push('VOIDED');
+    if (Object.keys(sale.returned || {}).length) r.push('EDIT_HAS_RETURNS');
+    if (sale.exchangeCredit || sale.newExchangeReceipt || (db.exchangeReceipts || []).some((x) => x.saleNo === sale.no || x.redeemedIn === sale.no)) r.push('EDIT_HAS_EXCHANGE');
+    return r;
+  };
+  /** lines edits are allowed only on plain invoices: no promotion, no invoice discount, no redeemed points, no serial lines */
+  Core.editLinesAllowed = function (sale) {
+    return !((sale.invoicePromoNames && sale.invoicePromoNames.length) || sale.invoiceDisc > 0 || sale.redeemValue > 0 || sale.lines.some((l) => (l.promoNames && l.promoNames.length) || l.promoDisc > 0 || (l.serials && l.serials.length)));
+  };
+  /**
+   * edits: { reason (required), lines?: [{ idx? , itemId?, qty, price?, manualAmt? }], customerId?, customerName?, payments? }
+   * lines = the complete new list (missing original lines are removed). approvedBy: user who approved (a manager/system PIN) when the editor needs it.
+   * Open shift: the same shift just recalculates. Closed shift: the closed Z stays as printed; the cash difference is booked as a cash movement in the editor's open shift.
+   */
+  Core.editSale = function (db, saleId, edits, user, opts, now) {
+    now = now || new Date(); opts = opts || {};
+    const sale = db.sales.find((x) => x.id === saleId); if (!sale) throw new Error('SALE_MISSING');
+    const appr = opts.approvedBy || null;
+    const allowed = Core.can(db, user, 'editInvoice') || (appr && Core.isApprover(db, appr) && Core.can(db, appr, 'editInvoice'));
+    if (!allowed) throw new Error('MANAGER_ONLY');
+    const reason = String(edits.reason || '').trim(); if (reason.length < 3) throw new Error('EDIT_REASON');
+    const bl = Core.editBlockers(db, sale); if (bl.length) throw new Error(bl[0]);
+    const before = snapshot(sale);
+    const sh = sale.shiftId && db.shifts.find((x) => x.id === sale.shiftId); const closed = !!(sh && sh.closedAt);
+    let adjShift = null;
+    if (closed) { adjShift = db.shifts.find((x) => x.userId === user.id && !x.closedAt); if (!adjShift) throw new Error('EDIT_NEEDS_OPEN_SHIFT'); }
+    const changeLines = Array.isArray(edits.lines);
+    if (changeLines && !Core.editLinesAllowed(sale)) throw new Error('EDIT_LINES_BLOCKED');
+    // work on a copy so any error leaves the invoice and stock untouched
+    const trial = clone({ sale, items: db.items.filter((i) => sale.lines.some((l) => l.itemId === i.id) || (edits.lines || []).some((l) => l.itemId === i.id)) });
+    const itemsById = {}; trial.items.forEach((i) => { itemsById[i.id] = i; });
+    const loy = db.settings.loyaltyEnabled;
+    const newCustomer = edits.customerId !== undefined && (edits.customerId || null) !== (sale.customerId || null);
+    if (newCustomer && sale.pointsEarned) throw new Error('EDIT_CUSTOMER_LOYALTY');
+    let calc = null, newLines = null, cogs = sale.cogs;
+    if (changeLines) {
+      // 1) give the old stock back, 2) re-sell the new lines
+      trial.sale.lines.forEach((l) => { const it = itemsById[l.itemId]; if (!it || it.service) return; it.stock = r2((it.stock || 0) + l.qty);
+        if (it.batchTracked) (l.alloc || []).forEach((a) => { let b = it.batches.find((x) => x.batch === a.batch); if (!b) { b = { batch: a.batch, expiry: a.expiry || '', qty: 0 }; it.batches.push(b); } b.qty = r2(b.qty + a.qty); }); });
+      const cartLines = edits.lines.map((e) => {
+        const orig = e.idx != null ? sale.lines[e.idx] : null; const itemId = orig ? orig.itemId : e.itemId;
+        let it = itemsById[itemId]; if (!it) { it = db.items.find((x) => x.id === itemId); if (!it) throw new Error('ITEM_MISSING'); it = clone(it); itemsById[itemId] = it; }
+        if (it.serialTracked) throw new Error('EDIT_LINES_BLOCKED');
+        const qty = e.qty; if (!Number.isFinite(qty) || !(qty > 0)) throw new Error('BAD_QTY');
+        const price = e.price != null ? e.price : (orig ? orig.price : it.price); if (!Number.isFinite(price) || price < 0) throw new Error('BAD_PRICE');
+        const manualAmt = e.manualAmt != null ? e.manualAmt : (orig && orig.manualDisc ? r2(orig.manualDisc * qty / orig.qty) : 0);
+        return { itemId, group: it.group || '', qty, price, manualAmt, noPromo: true };
+      });
+      if (!cartLines.length) throw new Error('EMPTY_CART');
+      calc = Core.computeCart({ lines: cartLines }, [], db.settings, now); newLines = [];
+      cogs = 0; const need = {}; cartLines.forEach((l) => { need[l.itemId] = r2((need[l.itemId] || 0) + l.qty); });
+      for (const id in need) { const it = itemsById[id]; if (!db.settings.allowNegativeStock && !it.service && (it.stock || 0) + 1e-9 < need[id]) { const e = new Error('NO_STOCK'); e.item = it.name; throw e; } }
+      calc.lines.forEach((l) => {
+        const it = itemsById[l.itemId]; const alloc = fefoAllocate(it, l.qty);
+        if (!it.service) { it.stock = r2((it.stock || 0) - l.qty); alloc.forEach((a) => { const b = it.batches.find((x) => x.batch === a.batch); if (b) b.qty = r2(b.qty - a.qty); }); }
+        cogs = r2(cogs + (it.cost || 0) * l.qty);
+        newLines.push({ itemId: it.id, barcode: it.barcode, name: it.name, nameEn: it.nameEn || '', group: it.group || '', qty: l.qty, price: l.price, gross: l.gross, promoDisc: 0, promoNames: [], manualDisc: l.manualDisc, invShare: l.invShare, tax: l.tax, total: l.total, cost: it.cost || 0, serials: [], alloc, unit: it.unit || '', exchangeOnly: false });
+      });
+    }
+    const total = calc ? calc.total : sale.total;
+    // payments: explicit, or (single method) follow the new total
+    let pays = edits.payments ? edits.payments.filter((p) => p.amount > 0) : null;
+    if (!pays) {
+      if (!calc || Math.abs(total - sale.total) < 0.005) pays = clone(sale.payments);
+      else if (sale.payments.length === 1) pays = [{ method: sale.payments[0].method, amount: total }];
+      else throw new Error('EDIT_PAYMENTS_REQUIRED');
+    }
+    pays.forEach((p) => { if (!Number.isFinite(p.amount) || p.amount < 0 || p.method === 'credit') throw new Error('BAD_PAYMENT'); });
+    const paid = r2(pays.reduce((t, p) => t + p.amount, 0)); const cash = r2(pays.filter((p) => p.method === 'cash').reduce((t, p) => t + p.amount, 0));
+    if (paid + 0.004 < total) throw new Error('UNDERPAID'); if (r2(paid - cash) > total + 0.004) throw new Error('NONCASH_OVER');
+    const change = r2(Math.max(0, paid - total)); if (change > cash + 0.004) throw new Error('CHANGE_EXCEEDS_CASH');
+    // ---- commit (everything validated) ----
+    if (changeLines) { Object.keys(itemsById).forEach((id) => { const live = db.items.find((x) => x.id === id); const t = itemsById[id]; if (live) { live.stock = t.stock; live.batches = t.batches; } }); }
+    const oldCash = cashNet(sale);
+    if (closed && !sale.closedShiftView) sale.closedShiftView = { total: sale.total, tax: sale.tax, payments: clone(sale.payments), change: sale.change };
+    if (changeLines) Object.assign(sale, { lines: newLines, gross: calc.gross, lineDisc: calc.lineDisc, invoiceDisc: 0, subtotal: calc.subtotal, tax: calc.tax, total: calc.total, cogs });
+    sale.payments = pays; sale.paid = paid; sale.change = change;
+    if (edits.customerId !== undefined) { sale.customerId = edits.customerId || null; sale.customerName = edits.customerName || ''; }
+    if (loy && sale.customerId && sale.pointsEarned && changeLines) {
+      const c = db.customers.find((x) => x.id === sale.customerId); const np = Math.floor(sale.total / (db.settings.loyaltyEarnPerCurrency || 10));
+      if (c) c.points = r2(Math.max(0, (c.points || 0) - sale.pointsEarned + np)); sale.pointsEarned = np;
+    }
+    const cashDiff = r2(cashNet(sale) - oldCash); let adj = null;
+    if (closed && Math.abs(cashDiff) >= 0.005) { adj = { ts: now.toISOString(), kind: cashDiff > 0 ? 'in' : 'out', amount: Math.abs(cashDiff), reason: 'Edit ' + sale.no + ': ' + reason, approvedBy: appr ? appr.name : user.name, edit: true, saleNo: sale.no }; adjShift.moves.push(adj); }
+    sale.revisions = sale.revisions || []; const rev = sale.revisions.length + 1;
+    sale.rev = rev; sale.edited = true; sale.revisions.push({ rev, ts: now.toISOString(), by: user.name, approvedBy: appr ? appr.name : '', reason, before });
+    db.edits = db.edits || [];
+    const log = { id: Core.uid('edit'), ts: now.toISOString(), saleId: sale.id, saleNo: sale.no, rev, user: user.name, userId: user.id, approvedBy: appr ? appr.name : '', reason, shiftClosed: closed, cashDiff, adjustmentShift: adjShift ? adjShift.id : '', before, after: snapshot(sale) };
+    db.edits.push(log); Core.touchSale && Core.touchSale(db, sale);
+    return { sale, log, cashDiff };
+  };
+  Core.touchSale = function (db, sale) { (db._dirty = db._dirty || {}); (db._dirty.sales = db._dirty.sales || []).push(sale.id); };
 
   // ---------- shifts ----------
   Core.openShift = function (db, user, openingCash, profileName) {
@@ -525,7 +667,8 @@
   };
   Core.shiftSummary = function (db, shift) {
     const rows = db.sales.filter((x) => x.shiftId === shift.id && x.status !== 'voided');
-    const sales = rows.filter((x) => x.type === 'sale');
+    const view = (x) => (x.closedShiftView && shift.closedAt ? Object.assign({}, x, x.closedShiftView) : x); // a closed shift keeps the numbers it was closed with
+    const sales = rows.filter((x) => x.type === 'sale').map(view);
     const rets = rows.filter((x) => x.type === 'return');
     const byMethod = {};
     sales.forEach((s) => s.payments.forEach((p) => { byMethod[p.method] = r2((byMethod[p.method] || 0) + p.amount); }));
@@ -690,7 +833,7 @@
     return p;
   };
   Core.voidPurchase = function (db, id, user) {
-    if (user.role !== 'manager') throw new Error('MANAGER_ONLY');
+    if (!Core.can(db, user, 'importPurchases')) throw new Error('MANAGER_ONLY');
     const p = db.purchases.find((x) => x.id === id);
     if (!p || p.status === 'voided') throw new Error('PURCHASE_MISSING');
     // check feasibility first

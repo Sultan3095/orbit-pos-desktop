@@ -75,7 +75,7 @@ t('void sale restores stock; manager only; blocked after return', () => {
 // ---- supplier invoice import ----
 const H = ['Barcode', 'Name', 'Qty', 'Cost', 'Discount %', 'Batch', 'Expiry', 'Serial', 'Sell Price'];
 t('import: valid file with 3 existing items increases stock and cost (average)', () => {
-  const db = mk(); const res = C.parseSupplierRows([H, ['111', '', 10, 6, 0, '', '', '', 12], ['222', '', 5, 4, 0, '', '', '', ''], ['333', '', 2, 25, 10, '', '', '', '']], db.items);
+  const db = mk(); db.users[0].role = 'system'; const res = C.parseSupplierRows([H, ['111', '', 10, 6, 0, '', '', '', 12], ['222', '', 5, 4, 0, '', '', '', ''], ['333', '', 2, 25, 10, '', '', '', '']], db.items);
   assert.strictEqual(res.errors.length, 0); const p = C.finalizePurchase(db, { lines: res.rows, supplierId: 's1', invoiceNo: 'INV1' }, db.users[0]);
   assert.strictEqual(db.items[0].stock, 110); assert.strictEqual(db.items[0].cost, 6); assert.strictEqual(db.items[0].price, 12);
   assert.strictEqual(db.items[2].cost, C.r2((10 * 20 + 2 * 22.5) / 12)); assert.strictEqual(p.total, 60 + 20 + 45); });
@@ -89,7 +89,7 @@ t('import: bad rows rejected with row numbers and nothing is saved', () => {
   ['2:BAD_QTY', '3:BAD_COST', '4:BAD_EXPIRY', '5:NO_BARCODE', '6:NEW_NEEDS_NAME'].forEach((c) => assert.ok(codes.includes(c), c + ' in ' + codes));
   assert.strictEqual(db.items[0].stock, 100); });
 t('import: duplicate barcode rows merge with a warning (not silently)', () => {
-  const db = mk(); const res = C.parseSupplierRows([H, ['111', '', 2, 6], ['111', '', 3, 6]], db.items); assert.strictEqual(res.rows.length, 1); assert.strictEqual(res.rows[0].qty, 5); assert.strictEqual(res.warnings[0].code, 'MERGED'); });
+  const db = mk(); db.users[0].role = 'system'; const res = C.parseSupplierRows([H, ['111', '', 2, 6], ['111', '', 3, 6]], db.items); assert.strictEqual(res.rows.length, 1); assert.strictEqual(res.rows[0].qty, 5); assert.strictEqual(res.warnings[0].code, 'MERGED'); });
 t('import: serials must equal qty, no duplicates in file or stock', () => {
   const db = mk(); db.items[2].serials = ['S9'];
   let res = C.parseSupplierRows([H, ['333', '', 2, 5, 0, '', '', 'S1,S2'], ['333', '', 1, 5, 0, '', '', 'S2']], db.items); assert.ok(res.errors.some((e) => e.code === 'SERIAL_DUP_FILE'));
@@ -100,12 +100,12 @@ t('import: Arabic headers and Arabic-Indic digits', () => {
   assert.strictEqual(res.errors.length, 0, JSON.stringify(res.errors)); assert.strictEqual(res.rows[0].qty, 5); assert.strictEqual(res.rows[0].cost, 6.5); assert.strictEqual(res.rows[0].expiry, '2027-03-01'); });
 t('import: missing required headers rejected', () => { assert.strictEqual(C.parseSupplierRows([['name', 'qty']], []).errors[0].code, 'HEADERS'); });
 t('purchase: same supplier invoice twice warns; void restores', () => {
-  const db = mk(); const res = C.parseSupplierRows([H, ['111', '', 10, 6]], db.items);
+  const db = mk(); db.users[0].role = 'system'; const res = C.parseSupplierRows([H, ['111', '', 10, 6]], db.items);
   const p = C.finalizePurchase(db, { lines: res.rows, supplierId: 's', invoiceNo: 'X' }, db.users[0]);
   assert.throws(() => C.finalizePurchase(db, { lines: res.rows, supplierId: 's', invoiceNo: 'X' }, db.users[0]), /DUP_INVOICE/);
   C.voidPurchase(db, p.id, db.users[0]); assert.strictEqual(db.items[0].stock, 100); });
 t('purchase void blocked when stock already sold', () => {
-  const db = mk(); const res = C.parseSupplierRows([H, ['333', '', 5, 20]], db.items); const p = C.finalizePurchase(db, { lines: res.rows }, db.users[0]);
+  const db = mk(); db.users[0].role = 'system'; const res = C.parseSupplierRows([H, ['333', '', 5, 20]], db.items); const p = C.finalizePurchase(db, { lines: res.rows }, db.users[0]);
   C.finalizeSale(db, { cart: { lines: [line('c', 'G2', 15, 30)] }, payments: pay(450), user: db.users[1] }); assert.throws(() => C.voidPurchase(db, p.id, db.users[0]), /STOCK_USED/); });
 t('FEFO batch deduction; return restores same batch', () => {
   const db = mk(); const it = db.items[0]; it.batchTracked = true; it.stock = 10; it.batches = [{ batch: 'late', expiry: '2028-01-01', qty: 5 }, { batch: 'early', expiry: '2027-01-01', qty: 5 }];
@@ -251,4 +251,67 @@ t('return window 0 = no limit for cashiers too (was: every return needed a manag
   const { db, cash, sale } = mk2(); db.settings.returnDays = 0; const s = sale(1, [{ method: 'cash', amount: 10 }]);
   s.ts = new Date(Date.now() - 400 * 86400000).toISOString(); assert.ok(C.canReturn(db, s, cash).ok);
   db.settings.returnDays = 7; assert.strictEqual(C.canReturn(db, s, cash).code, 'WINDOW');
+});
+
+// ---- roles & permissions ----
+t('default matrix: cashier limited, manager no cost, system everything', () => {
+  const db = C.newDB(); const cs = { role: 'cashier' }, mg = { role: 'manager' }, sy = { role: 'system' };
+  assert.strictEqual(C.perm(db, cs, 'discountAbove'), 'A'); assert.strictEqual(C.perm(db, cs, 'editItems'), 'N'); assert.strictEqual(C.perm(db, cs, 'sell'), 'Y');
+  assert.strictEqual(C.perm(db, mg, 'seeCost'), 'N'); assert.strictEqual(C.perm(db, mg, 'reports'), 'Y'); assert.strictEqual(C.perm(db, mg, 'settings'), 'N'); assert.strictEqual(C.perm(db, mg, 'editInvoice'), 'Y');
+  C.PERMS.forEach((p) => assert.strictEqual(C.perm(db, sy, p[0]), 'Y')); assert.strictEqual(C.perm(db, sy, 'nonsense'), 'N');
+});
+t('system manager can change the matrix; system itself cannot be locked out', () => {
+  const db = C.newDB(); C.upgradeRoles(db); db.settings.permissions.cashier.priceOverride = 'Y'; db.settings.permissions.manager.seeCost = 'Y'; db.settings.permissions.system.settings = 'N';
+  assert.strictEqual(C.perm(db, { role: 'cashier' }, 'priceOverride'), 'Y'); assert.strictEqual(C.perm(db, { role: 'manager' }, 'seeCost'), 'Y'); assert.strictEqual(C.perm(db, { role: 'system' }, 'settings'), 'Y');
+});
+t('upgrade: first manager becomes System manager, others stay managers, missing switches are filled', () => {
+  const db = C.newDB(); db.users.push(C.makeUser('Owner', '1', 'manager'), C.makeUser('Mgr2', '2', 'manager'), C.makeUser('C', '3', 'cashier'));
+  assert.strictEqual(C.upgradeRoles(db), 'Owner'); assert.deepStrictEqual(db.users.map((u) => u.role), ['system', 'manager', 'cashier']); assert.strictEqual(C.upgradeRoles(db), null);
+  assert.ok(db.settings.permissions.manager.reports);
+});
+t('return after window follows the role: cashier needs approval, manager passes, role set to N is blocked', () => {
+  const { db, cash, sale } = mk2(); db.settings.returnDays = 7; const s = sale(1, [{ method: 'cash', amount: 10 }]); s.ts = new Date(Date.now() - 30 * 86400000).toISOString();
+  const mg = { role: 'manager', id: 'm' }; C.upgradeRoles(db);
+  assert.strictEqual(C.canReturn(db, s, cash).code, 'WINDOW'); assert.ok(C.canReturn(db, s, mg).ok);
+  db.settings.permissions.cashier.returnAfterWindow = 'N'; assert.strictEqual(C.canReturn(db, s, cash).code, 'WINDOW_BLOCKED');
+});
+
+// ---- edit invoice (revision) ----
+const mkEdit = () => { const e = mk2(); C.upgradeRoles(e.db); e.boss.role = 'system'; return e; };
+t('edit in an OPEN shift: quantity change recalculates total, stock, payments; revision + audit log kept', () => {
+  const { db, boss, cash, sh, sale } = mkEdit(); const s = sale(2, [{ method: 'cash', amount: 20 }]); const stock0 = db.items[0].stock;
+  assert.throws(() => C.editSale(db, s.id, { reason: 'x', lines: [{ idx: 0, qty: 3 }] }, cash), /MANAGER_ONLY/);
+  throws(() => C.editSale(db, s.id, { reason: '', lines: [{ idx: 0, qty: 3 }] }, boss), 'EDIT_REASON');
+  const r = C.editSale(db, s.id, { reason: 'customer took 3', lines: [{ idx: 0, qty: 3 }] }, boss);
+  assert.strictEqual(s.total, 30); assert.strictEqual(db.items[0].stock, stock0 - 1); assert.strictEqual(s.payments[0].amount, 30); assert.strictEqual(s.rev, 1);
+  assert.strictEqual(s.revisions[0].before.total, 20); assert.strictEqual(db.edits.length, 1); assert.strictEqual(db.edits[0].after.total, 30); assert.strictEqual(r.cashDiff, 10);
+  assert.strictEqual(C.shiftSummary(db, sh).expectedCash, 130);
+});
+t('edit after the shift is CLOSED: closed Z unchanged, cash difference booked in the editor\'s open shift, never a void', () => {
+  const { db, boss, cash, sh, sale } = mkEdit(); const s = sale(2, [{ method: 'cash', amount: 20 }]); C.closeShift(db, sh, 120, '');
+  throws(() => C.voidSale(db, s.id, boss, 'oops'), 'VOID_CLOSED_SHIFT');
+  throws(() => C.editSale(db, s.id, { reason: 'wrong qty', lines: [{ idx: 0, qty: 1 }] }, boss), 'EDIT_NEEDS_OPEN_SHIFT');
+  const sh2 = C.openShift(db, boss, 50); const r = C.editSale(db, s.id, { reason: 'wrong qty', lines: [{ idx: 0, qty: 1 }] }, boss);
+  assert.strictEqual(r.cashDiff, -10); assert.strictEqual(C.shiftSummary(db, sh).expectedCash, 120); assert.strictEqual(sh.expectedCash, 120);
+  assert.strictEqual(sh2.moves.length, 1); assert.strictEqual(sh2.moves[0].kind, 'out'); assert.strictEqual(sh2.moves[0].amount, 10); assert.strictEqual(C.shiftSummary(db, sh2).expectedCash, 40);
+  assert.strictEqual(C.salesReport(db, C.today(), C.today()).net, 10); // reports show the corrected invoice
+});
+t('edit is blocked for invoices with returns or exchange receipts, promos or serials; bad input changes nothing', () => {
+  const { db, boss, cash, sh, sale } = mkEdit(); const s = sale(2, [{ method: 'cash', amount: 20 }]); const stock0 = db.items[0].stock;
+  throws(() => C.editSale(db, s.id, { reason: 'abc', lines: [{ idx: 0, qty: NaN }] }, boss), 'BAD_QTY'); throws(() => C.editSale(db, s.id, { reason: 'abc', lines: [{ idx: 0, qty: 500 }] }, boss), 'NO_STOCK');
+  assert.strictEqual(db.items[0].stock, stock0); assert.strictEqual(s.total, 20); assert.strictEqual(db.edits.length, 0);
+  C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1 }], cash, { method: 'cash', shiftId: sh.id }); throws(() => C.editSale(db, s.id, { reason: 'abc', lines: [{ idx: 0, qty: 1 }] }, boss), 'EDIT_HAS_RETURNS');
+});
+t('edit can change customer and payment split without touching items', () => {
+  const { db, boss, sale } = mkEdit(); const s = sale(2, [{ method: 'cash', amount: 20 }]);
+  C.editSale(db, s.id, { reason: 'paid by card', payments: [{ method: 'card', amount: 20 }], customerId: 'c1', customerName: 'Ahmed' }, boss);
+  assert.strictEqual(s.payments[0].method, 'card'); assert.strictEqual(s.customerName, 'Ahmed'); assert.strictEqual(db.items[0].stock, 98);
+});
+
+t('two cashiers run overlapping shifts without touching each other', () => {
+  const { db, cash, sh, sale } = mk2(); const c2 = C.makeUser('C2', '1111', 'cashier'); db.users.push(c2); const sh2 = C.openShift(db, c2, 200);
+  throws(() => C.openShift(db, c2, 1), 'SHIFT_OPEN');
+  sale(1, [{ method: 'cash', amount: 10 }]); C.finalizeSale(db, { cart: { lines: [{ itemId: 'a', qty: 3, price: 10, group: '' }] }, payments: [{ method: 'cash', amount: 30 }], user: c2, shiftId: sh2.id });
+  assert.strictEqual(C.shiftSummary(db, sh).expectedCash, 110); assert.strictEqual(C.shiftSummary(db, sh2).expectedCash, 230);
+  C.closeShift(db, sh, 110, ''); assert.ok(!sh2.closedAt); assert.strictEqual(C.shiftSummary(db, sh2).expectedCash, 230);
 });
