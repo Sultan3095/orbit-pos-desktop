@@ -199,3 +199,18 @@ t('a returned serial cannot be returned twice (duplicate-serial hole)', () => {
   C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1, serials: ['S2'] }], u, {});
 });
 console.log(n + ' passed');
+
+// ---- PIN hashing (scrypt) ----
+t('new users get a scrypt PIN hash, right PIN passes, wrong fails', () => {
+  const u = C.makeUser('X', '4321', 'cashier');
+  assert.ok(u.pinHash.startsWith('s1$') && u.pinHash.length > 60);
+  assert.ok(C.checkPin(u, '4321')); assert.ok(!C.checkPin(u, '4322'));
+});
+t('same PIN, different users -> different hashes (random salt)', () => {
+  assert.notStrictEqual(C.makeUser('A', '1111').pinHash, C.makeUser('B', '1111').pinHash);
+});
+t('old weak PIN hash still logs in once and is upgraded to scrypt', () => {
+  const u = { id: 'u1', name: 'Old', role: 'manager', salt: 'abc12345', active: true, pinHash: C.hashPin('5555', 'abc12345') };
+  assert.ok(!C.checkPin(u, '0000')); assert.ok(!u.pinHash.startsWith('s1$'));
+  assert.ok(C.checkPin(u, '5555')); assert.ok(u.pinHash.startsWith('s1$')); assert.ok(C.checkPin(u, '5555')); assert.ok(!C.checkPin(u, '5556'));
+});

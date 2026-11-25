@@ -33,8 +33,10 @@ function doBackup(tag) {
 
 function createWindow() {
   win = new BrowserWindow({ width: 1366, height: 820, minWidth: 1024, minHeight: 640, show: false, backgroundColor: '#f4f5f7',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: false } });
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   Menu.setApplicationMenu(null);
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.loadFile(path.join(__dirname, 'src', 'index.html'));
   win.once('ready-to-show', () => win.show());
   win.on('closed', () => { win = null; if (display) display.close(); });
@@ -56,6 +58,7 @@ if (!gotLock) app.quit(); else {
 
 ipcMain.handle('db:load', () => { try { return fs.existsSync(dataFile()) ? fs.readFileSync(dataFile(), 'utf8') : null; } catch (e) {
   try { return fs.readFileSync(dataFile() + '.bak', 'utf8'); } catch (e2) { return null; } } });
+ipcMain.on('pin:scrypt', (e, pin, salt) => { try { e.returnValue = require('crypto').scryptSync(String(pin), String(salt), 32).toString('hex'); } catch (err) { e.returnValue = null; } });
 ipcMain.handle('db:save', (_e, json) => { atomicWrite(dataFile(), json); return true; });
 ipcMain.handle('app:info', () => ({ dataFile: dataFile(), version: app.getVersion(), backupDir: defaultBackupDir() }));
 ipcMain.handle('backup:now', () => doBackup('manual'));
@@ -96,7 +99,8 @@ ipcMain.handle('print:html', async (_e, html, opts) => {
 });
 ipcMain.handle('display:open', () => {
   if (display && !display.isDestroyed()) { display.focus(); return true; }
-  display = new BrowserWindow({ width: 900, height: 600, title: 'Orbit POS', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true } });
+  display = new BrowserWindow({ width: 900, height: 600, title: 'Orbit POS', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true } });
+  display.webContents.setWindowOpenHandler(() => ({ action: 'deny' })); display.webContents.on('will-navigate', (e) => e.preventDefault());
   display.setMenu(null); display.loadFile(path.join(__dirname, 'src', 'display.html'));
   display.on('closed', () => { display = null; }); return true;
 });

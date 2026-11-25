@@ -81,11 +81,30 @@
     }
     return h1.toString(16) + h2.toString(16);
   };
-  Core.makeUser = function (name, pin, role) {
-    const salt = Math.random().toString(36).slice(2, 10);
-    return { id: Core.uid('u'), name, role: role || 'cashier', salt, pinHash: Core.hashPin(pin, salt), active: true };
+  // scrypt (memory-hard) is provided by the host: Node crypto in tests, the main process in the app.
+  const scryptHex = (pin, salt) => {
+    try {
+      if (typeof require === 'function') { const c = require('crypto'); return c.scryptSync(String(pin), String(salt), 32).toString('hex'); }
+      if (root.api && root.api.scrypt) return root.api.scrypt(String(pin), String(salt));
+    } catch (e) {}
+    return null;
   };
-  Core.checkPin = function (user, pin) { return !!user && user.active !== false && Core.hashPin(pin, user.salt) === user.pinHash; };
+  const newSalt = () => {
+    try { if (typeof require === 'function') return require('crypto').randomBytes(16).toString('hex'); } catch (e) {}
+    if (root.crypto && root.crypto.getRandomValues) { const a = new Uint8Array(16); root.crypto.getRandomValues(a); return Array.from(a, (x) => x.toString(16).padStart(2, '0')).join(''); }
+    return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+  };
+  Core.makeUser = function (name, pin, role) {
+    const salt = newSalt(); const h = scryptHex(pin, salt);
+    return { id: Core.uid('u'), name, role: role || 'cashier', salt, pinHash: h ? 's1$' + h : Core.hashPin(pin, salt), active: true };
+  };
+  Core.checkPin = function (user, pin) {
+    if (!user || user.active === false) return false;
+    if (String(user.pinHash).startsWith('s1$')) { const h = scryptHex(pin, user.salt); return !!h && 's1$' + h === user.pinHash; }
+    if (Core.hashPin(pin, user.salt) !== user.pinHash) return false;
+    const h = scryptHex(pin, user.salt); if (h) user.pinHash = 's1$' + h; // upgrade the old weak hash on first good login
+    return true;
+  };
 
   // ---------- promotions ----------
   // promo: {id,name,active,type,scope:{type:'all'|'item'|'group',value},params,start,end,days,stackable,priority}
