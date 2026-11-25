@@ -1,6 +1,10 @@
 name: Build installers
 on:
   workflow_dispatch:
+    inputs:
+      all:
+        description: 'Also build macOS and Linux'
+        default: 'false'
   push:
     tags: ['v*']
 jobs:
@@ -8,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        os: ${{ fromJSON(github.event.inputs.all == 'true' && '["windows-latest","macos-latest","ubuntu-latest"]' || '["windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
