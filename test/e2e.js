@@ -34,13 +34,13 @@ app.whenReady().then(async () => {
     await ev(`document.querySelector('[data-lang="ar"]')&&document.querySelector('[data-lang="ar"]').click()`);
     await setv('[name=storeName]', 'سوبر ماركت النور'); await setv('[name=name]', 'مدير'); await setv('[name=pin]', '1234'); await shot('01-wizard-ar');
     await click('#wiz-go'); await sleep(400);
-    check('wizard created manager', await ev(`return App.db.users.length===1 && App.db.users[0].role==='manager'`));
+    check('wizard created manager', await ev(`return App.db.users.length===1 && App.db.users[0].role==='system'`));
     // login
     await click('[data-u]'); await setv('#pin', '1234'); await click('#pin-go'); await sleep(400);
     check('logged in, sell view', await ev(`return !!document.querySelector('.sell') && App.user.name==='مدير'`));
     await shot('02-sell-empty-ar');
     // 2. add items via UI
-    await click('[data-nav=items]'); await sleep(200);
+    await click('[data-nav=items]'); await sleep(600);
     for (const it of [['6221', 'لبن كامل الدسم', 'Milk', 'ألبان', 10, 15, 50], ['6222', 'شيبسي', 'Chips', 'سناكس', 5, 8, 100], ['6223', 'جبنة رومي', 'Roumy cheese', 'ألبان', 60, 90, 20]]) {
       await click('#i-add'); await sleep(150);
       await setv('[name=barcode]', it[0]); await setv('[name=name]', it[1]); await setv('[name=nameEn]', it[2]); await setv('[name=group]', it[3]); await setv('[name=cost]', it[4]); await setv('[name=price]', it[5]); await setv('[name=stock]', it[6]);
@@ -171,13 +171,36 @@ app.whenReady().then(async () => {
     await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
     // used receipt rejected
     check('a used exchange receipt is rejected', await ev(`try{Core.checkExchangeReceipt(App.db,'${rx.no}');return false}catch(e){return e.message==='EXR_USED'}`));
+    // 10b. roles: cost hidden for manager, cashier limited, settings matrix, edit invoice with revised print
+    
+    await ev(`App.db.users.push(Core.makeUser('Mona','2222','manager'), Core.makeUser('Omar','3333','cashier')); App._sys=App.db.users[0]; App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.items($('#main')); return 1`); await sleep(400);
+    await shot('40-manager-items-no-cost-ar');
+    check('manager: no cost / margin column, no cost field', await ev(`const th=[...document.querySelectorAll('#main th')].map(x=>x.textContent); return !th.includes(t('cost')) && !th.includes(t('margin')) && !document.getElementById('i-margin')`));
+    check('manager: reports have no profit or stock-at-cost', await ev(`Views.reports($('#main')); await new Promise(r=>setTimeout(r,300)); const tx=document.getElementById('main').textContent; return !tx.includes(t('todayProfit')) && !tx.includes(t('stockAtCost')) && !document.querySelector('[data-tab="stockval"]')`));
+    check('manager: no Settings nav, cashier: only selling screens', await ev(`const n=()=>[...document.querySelectorAll('[data-nav]')].map(x=>x.dataset.nav); let a=n(); App.user=App.db.users.find(u=>u.name==='Omar'); shell(); let b=n(); return !a.includes('settings') && a.includes('reports') && !b.includes('items') && !b.includes('reports') && !b.includes('settings') && b.includes('sell')`));
+    check('cashier shift close is blind (no expected amount)', await ev(`App.shift=App.db.shifts.find(s=>!s.closedAt); closeShiftModal(); await new Promise(r=>setTimeout(r,200)); const ok=!document.querySelector('.modal-wrap').textContent.includes(t('expectedCash')); document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return ok`));
+    await ev(`App.user=App._sys; shell(); Views.settings($('#main')); return 1`); await sleep(500);
+    await ev(`document.getElementById('perm-card').scrollIntoView(); return 1`); await shot('41-permission-matrix-ar');
+    check('system manager sees the permission matrix; locked rows disabled', await ev(`return !!document.querySelector('select[data-pm="cashier.sell"]') && document.querySelector('select[data-pm="system.settings"]').disabled`));
+    // edit invoice from History
+    await ev(`App.shift=curShift(); return 1`);
+    await ev(`const sh=curShift(); const it=App.db.items.find(i=>i.barcode==='6221'); const r=Core.finalizeSale(App.db,{cart:{lines:[{itemId:it.id,qty:2,price:it.price,group:it.group||''}]},payments:[{method:'cash',amount:2*it.price*1.5}],user:App.user,shiftId:sh.id}); App._editId=r.id||(App.db.sales.slice(-1)[0].id); return 1`);
+    await ev(`Views.history($('#main')); return 1`); await sleep(400);
+    check('history shows an Edit button for the invoice', await ev(`return !!document.querySelector('[data-ed="'+App._editId+'"]')`));
+    await ev(`editInvoiceModal(App.db.sales.find(s=>s.id===App._editId), ()=>{}); return 1`); await sleep(500);
+    await setv('.eq[data-i="0"]', 3); await setv('[name=reason]', 'العميل أخد 3'); await shot('42-edit-invoice-ar');
+    await ev(`window.api.print=async()=>({ok:true}); return 1`);
+    await modalBtn(1); await sleep(600);
+    const ed = await ev(`const s=App.db.sales.find(x=>x.id===App._editId); return {rev:s.rev, q:s.lines[0].qty, log:App.db.edits.length, html:receiptHTML(s,'ar').includes(t('rcRevised'))}`);
+    check('invoice edited as a revision; audit row; revised copy marked on the receipt', ed.rev === 1 && ed.q === 3 && ed.log === 1 && ed.html, JSON.stringify(ed));
+    await ev(`Views.settings($('#main')); return 1`); await sleep(400); await ev(`[...document.querySelectorAll('#main .card h3')].find(h=>h.textContent.includes(t('editLog'))).scrollIntoView(); return 1`); await shot('43-edit-log-ar');
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
     const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);
     const raw = fs.readFileSync(path.join(tmp, 'orbit-pos.db')); check('database file on disk is encrypted', !raw.includes(Buffer.from('لبن كامل')) && !raw.slice(0, 16).toString('latin1').includes('SQLite format'));
     check('no plaintext JSON data file exists', !fs.existsSync(path.join(tmp, 'orbit-pos.json')));
     check('no renderer console errors', errors.length === 0, errors.join(' | '));
-  } catch (e) { console.log('E2E EXCEPTION', e.message); fails++; try { await shot('zz-error'); } catch (x) {} }
+  } catch (e) { console.log('E2E EXCEPTION', e.message, errors.join(' | ')); fails++; try { await shot('zz-error'); } catch (x) {} }
   console.log(fails ? 'E2E FAILED ' + fails : 'E2E ALL PASSED'); console.log('shots in ' + OUT);
   app.exit(fails ? 1 : 0);
 });

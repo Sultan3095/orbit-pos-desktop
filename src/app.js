@@ -15,7 +15,8 @@ const money = (n, l) => Number(n || 0).toLocaleString(locFor(l), { minimumFracti
 const cur = () => App.db.settings.currency;
 const fmtDT = (iso) => { const d = new Date(iso); return d.toLocaleString(lang() === 'ar' ? locFor('ar') : 'en-GB', { dateStyle: 'short', timeStyle: 'short' }); };
 const itemName = (it, l) => ((l || lang()) === 'en' && it.nameEn) ? it.nameEn : it.name;
-const isMgr = () => App.user && App.user.role === 'manager';
+const can = (k) => !!App.user && Core.can(App.db, App.user, k);
+const isMgr = () => can('approve'); // may approve by own PIN (discount / return / cash-out limits)
 
 let saveTimer = null, saving = Promise.resolve();
 // only the rows that changed since the last successful save go to the encrypted SQLite store
@@ -65,14 +66,14 @@ function managerApproval(reason) {
     let done = false;
     const m = modal({ title: t('managerApproval'), body: '<p>' + esc(reason) + '</p><label>' + t('managerPin') + '</label><input id="mapin" type="password" inputmode="numeric" autofocus autocomplete="off">',
       buttons: [{ label: t('cancel') }, { label: t('approve'), cls: 'primary', onClick: (w) => {
-        const pin = $('#mapin', w).value; const mgr = App.db.users.find((u) => u.role === 'manager' && Core.checkPin(u, pin));
+        const pin = $('#mapin', w).value; const mgr = App.db.users.find((u) => Core.isApprover(App.db, u) && Core.checkPin(u, pin));
         if (!mgr) { toast(t('wrongPin'), 'err'); return false; } done = true; resolve(mgr); } }], enter: 1, onCancel: () => resolve(null) });
     m.addEventListener('click', (e) => { if (!done && e.target.matches('[data-b="0"]')) resolve(null); });
   });
 }
 function form(fields, vals) {
   vals = vals || {};
-  return fields.map((f) => {
+  return fields.filter((f) => !f.hidden).map((f) => {
     const v = vals[f.k] == null ? (f.def == null ? '' : f.def) : vals[f.k];
     let inp;
     if (f.type === 'select') inp = '<select name="' + f.k + '">' + f.opts.map((o) => '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(v) ? ' selected' : '') + '>' + esc(o[1]) + '</option>').join('') + '</select>';
@@ -151,6 +152,7 @@ async function boot() {
   }
   App.db = raw ? JSON.parse(raw) : Core.newDB();
   if (raw) Store.prime(App.db); else Store.reset();
+  Core.upgradeRoles(App.db);
   const def = Core.defaultSettings(); for (const k in def) if (App.db.settings[k] === undefined) App.db.settings[k] = def[k];
   ['held', 'audit', 'customers', 'suppliers', 'promos', 'purchases', 'shifts', 'sales', 'items', 'users'].forEach((k) => { if (!App.db[k]) App.db[k] = []; });
   applyTheme();
@@ -172,7 +174,7 @@ function setupWizard() {
       const v = readForm(root, [{ k: 'storeName' }, { k: 'name' }, { k: 'pin' }, { k: 'currency' }, { k: 'taxRate', type: 'number' }]);
       if (!v.storeName || !v.name || !/^\d{4,8}$/.test(v.pin)) return toast(t('wizInvalid'), 'err');
       App.db.settings.storeName = v.storeName; App.db.settings.currency = v.currency || 'EGP'; App.db.settings.taxRate = v.taxRate == null ? 14 : v.taxRate;
-      App.db.users.push(Core.makeUser(v.name, v.pin, 'manager')); save(true); root.onclick = null; login();
+      App.db.users.push(Core.makeUser(v.name, v.pin, 'system')); save(true); root.onclick = null; login();
     }
   };
 }
@@ -195,11 +197,11 @@ function login() {
 
 // ---------- shell ----------
 const NAV = [['sell', '🛒'], ['items', '📦'], ['purchases', '🧾'], ['promos', '🏷️'], ['people', '👥'], ['history', '📜'], ['shift', '⏱️'], ['reports', '📊'], ['settings', '⚙️']];
-const MGR_ONLY = ['items', 'purchases', 'promos', 'reports', 'settings'];
+const NAV_PERM = { items: 'editItems', purchases: 'importPurchases', promos: 'promos', reports: 'reports', settings: 'settings' };
 function curShift() { return App.db.shifts.find((s) => s.userId === App.user.id && !s.closedAt) || null; }
 function shell() {
   App.shift = curShift();
-  const nav = NAV.filter((n) => isMgr() || MGR_ONLY.indexOf(n[0]) < 0 || n[0] === 'items' && false);
+  const nav = NAV.filter((n) => !NAV_PERM[n[0]] || can(NAV_PERM[n[0]]));
   $('#app').innerHTML = '<div class="shell"><aside class="side"><div class="brand">◉ Orbit POS<small>' + esc(App.db.settings.storeName) + '</small></div>' +
     nav.map((n) => '<button class="nav' + (App.view === n[0] ? ' on' : '') + '" data-nav="' + n[0] + '"><span>' + n[1] + '</span> ' + t('nav_' + n[0]) + '</button>').join('') +
     '<div class="grow"></div><div class="who">' + esc(App.user.name) + '<small>' + t(App.user.role) + '</small></div>' +
@@ -343,14 +345,14 @@ const Sell = {
   editLine(i) {
     const l = App.cart.lines[i]; const it = App.db.items.find((x) => x.id === l.itemId);
     const fields = [{ k: 'qty', label: t('qty'), type: 'number', step: 'any', def: l.qty }, { k: 'pct', label: t('discountPct'), type: 'number', step: 'any', def: l.manualPct || '' }, { k: 'amt', label: t('discountAmt'), type: 'number', step: 'any', def: l.manualAmt || '' }];
-    if (isMgr()) fields.push({ k: 'price', label: t('price'), type: 'number', step: 'any', def: l.price });
+    if (can('priceOverride')) fields.push({ k: 'price', label: t('price'), type: 'number', step: 'any', def: l.price });
     modal({ title: itemName(l, lang()), body: '<p class="muted sm">' + t('manualDiscNote') + '</p><div class="grid2">' + form(fields) + '</div>', buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: async (w) => {
       const v = readForm(w, fields); let pct = v.pct || 0, amt = v.amt || 0;
       if (pct < 0 || amt < 0 || pct > 100) { toast(t('invalidValue'), 'err'); return false; }
       const maxPct = App.db.settings.maxCashierDiscountPct; const effPct = pct + (amt && l.price * l.qty ? amt / (l.price * l.qty) * 100 : 0);
       if (effPct > maxPct && !isMgr()) { const mgr = await managerApproval(t('discountAbove', { n: maxPct })); if (!mgr) return false; l.approvedBy = mgr.name; }
       if (!it.serialTracked && v.qty != null) { if (!(v.qty > 0)) { toast(t('invalidValue'), 'err'); return false; } if (!it.service && !App.db.settings.allowNegativeStock && v.qty > it.stock + 1e-9) { toast(t('err_NO_STOCK'), 'err'); return false; } l.qty = v.qty; }
-      l.manualPct = pct; l.manualAmt = amt; if (isMgr() && v.price != null && v.price >= 0) l.price = v.price;
+      l.manualPct = pct; l.manualAmt = amt; if (can('priceOverride') && v.price != null && v.price >= 0) l.price = v.price;
       this.renderCart(); this.pushDisplay(); } }], enter: 1 });
   },
   invoiceDiscount() {
@@ -467,7 +469,7 @@ function receiptHTML(doc, l) {
   const pay = (doc.payments || []).map((p) => '<tr><td>' + tr('pm_' + p.method, l) + '</td><td class="e">' + m(p.amount) + '</td></tr>').join('');
   return '<!doctype html><html dir="' + (rtl ? 'rtl' : 'ltr') + '" lang="' + l + '"><head><meta charset="utf-8"><style>@page{size:' + w + ' auto;margin:0}*{box-sizing:border-box}body{width:' + w + ';margin:0 auto;padding:3mm;font:12px/1.35 "Segoe UI",Tahoma,Arial,sans-serif;color:#000}h2,h3,p{margin:0;text-align:center}table{width:100%;border-collapse:collapse}td{padding:1px 0;vertical-align:top}.e{text-align:' + (rtl ? 'left' : 'right') + '}hr{border:0;border-top:1px dashed #000;margin:4px 0}.big{font-size:15px;font-weight:700}.sm{font-size:10px}</style></head><body>' +
     '<h2>' + esc(s.storeName) + '</h2>' + (s.storeAddress ? '<p class="sm">' + esc(s.storeAddress) + '</p>' : '') + (s.storePhone ? '<p class="sm">' + esc(s.storePhone) + '</p>' : '') + (s.taxNumber ? '<p class="sm">' + tr('taxNo', l) + ': ' + esc(s.taxNumber) + '</p>' : '') +
-    '<hr><h3>' + tr(isRet ? 'rcReturn' : 'rcInvoice', l) + '</h3><table><tr><td>' + tr('rcNo', l) + '</td><td class="e">' + esc(doc.no) + '</td></tr><tr><td>' + tr('rcDate', l) + '</td><td class="e">' + new Date(doc.ts).toLocaleString(rtl ? locFor('ar') : 'en-GB') + '</td></tr><tr><td>' + tr('rcCashier', l) + '</td><td class="e">' + esc(doc.userName) + '</td></tr>' +
+    '<hr><h3>' + tr(isRet ? 'rcReturn' : 'rcInvoice', l) + '</h3>' + (doc.rev ? '<p><b>' + tr('rcRevised', l) + ' ' + doc.rev + '</b></p>' : '') + '<table><tr><td>' + tr('rcNo', l) + '</td><td class="e">' + esc(doc.no) + '</td></tr><tr><td>' + tr('rcDate', l) + '</td><td class="e">' + new Date(doc.ts).toLocaleString(rtl ? locFor('ar') : 'en-GB') + '</td></tr><tr><td>' + tr('rcCashier', l) + '</td><td class="e">' + esc(doc.userName) + '</td></tr>' +
     (isRet ? '<tr><td>' + tr('rcOrig', l) + '</td><td class="e">' + esc(doc.saleNo) + '</td></tr>' : '') + '<tr><td>' + tr('customer', l) + '</td><td class="e">' + esc(doc.customerName || tr('rcCashCustomer', l)) + '</td></tr>' + '</table><hr>' +
     '<table>' + rows.map((r) => '<tr><td colspan="2"><b>' + esc(r.name) + '</b></td></tr><tr><td>' + (r.price != null ? r.qty + ' × ' + m(r.price) : r.qty) + (r.promo && r.promo.length ? ' <span class="sm">(' + esc(r.promo.join(', ')) + ')</span>' : '') + '</td><td class="e">' + m(r.total) + '</td></tr>').join('') + '</table><hr>' +
     (isRet ? '<table><tr class="big"><td>' + tr('rcRefund', l) + '</td><td class="e">' + m(doc.refund) + ' ' + esc(s.currency) + '</td></tr></table>' :

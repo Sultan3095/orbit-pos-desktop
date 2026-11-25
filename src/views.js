@@ -13,13 +13,13 @@ Views.items = function (m) {
     const q = st.q.toLowerCase();
     let rows = App.db.items.filter((i) => (!q || i.barcode.includes(q) || i.name.toLowerCase().includes(q) || (i.nameEn || '').toLowerCase().includes(q) || (i.group || '').toLowerCase().includes(q)));
     if (st.filter === 'noprice') rows = rows.filter((i) => !(i.price > 0)); else if (st.filter === 'low') rows = rows.filter((i) => !i.service && i.stock <= (i.minStock || 0));
-    $('#itbody', m).innerHTML = table([t('barcode'), t('name'), t('group'), t('cost'), t('price'), t('margin'), t('stock'), ''], rows.slice(0, 400).map((i) => {
+    $('#itbody', m).innerHTML = table([t('barcode'), t('name'), t('group')].concat(can('seeCost') ? [t('cost')] : []).concat([t('price')]).concat(can('seeCost') ? [t('margin')] : []).concat([t('stock'), '']), rows.slice(0, 400).map((i) => {
       const mg = i.price > 0 && i.cost > 0 ? Math.round((i.price - i.cost) / i.cost * 100) + '%' : '-';
-      return '<tr class="' + (i.active === false ? 'dim' : '') + '"><td>' + esc(i.barcode) + '</td><td>' + esc(i.name) + (i.nameEn ? '<small class="muted"> · ' + esc(i.nameEn) + '</small>' : '') + (i.batchTracked ? ' <span class="tag">B</span>' : '') + (i.serialTracked ? ' <span class="tag">SN</span>' : '') + (i.byWeight ? ' <span class="tag">kg</span>' : '') + '</td><td>' + esc(i.group || '') + '</td><td>' + money(i.cost) + '</td><td class="' + (i.price > 0 ? '' : 'bad') + '">' + money(i.price) + '</td><td>' + mg + '</td><td class="' + (!i.service && i.stock <= (i.minStock || 0) ? 'bad' : '') + '">' + (i.service ? '∞' : i.stock) + '</td><td class="nw"><button class="btn sm" data-edit="' + i.id + '">✎</button> <button class="btn sm" data-adj="' + i.id + '">±</button></td></tr>';
+      return '<tr class="' + (i.active === false ? 'dim' : '') + '"><td>' + esc(i.barcode) + '</td><td>' + esc(i.name) + (i.nameEn ? '<small class="muted"> · ' + esc(i.nameEn) + '</small>' : '') + (i.batchTracked ? ' <span class="tag">B</span>' : '') + (i.serialTracked ? ' <span class="tag">SN</span>' : '') + (i.byWeight ? ' <span class="tag">kg</span>' : '') + '</td><td>' + esc(i.group || '') + '</td>' + (can('seeCost') ? '<td>' + money(i.cost) + '</td>' : '') + '<td class="' + (i.price > 0 ? '' : 'bad') + '">' + money(i.price) + '</td>' + (can('seeCost') ? '<td>' + mg + '</td>' : '') + '<td class="' + (!i.service && i.stock <= (i.minStock || 0) ? 'bad' : '') + '">' + (i.service ? '∞' : i.stock) + '</td><td class="nw"><button class="btn sm" data-edit="' + i.id + '">✎</button> <button class="btn sm" data-adj="' + i.id + '">±</button></td></tr>';
     }));
     $('#itcount', m).textContent = rows.length + ' / ' + App.db.items.length;
   };
-  m.innerHTML = head(t('nav_items'), '<button class="btn primary" id="i-add">+ ' + t('addItem') + '</button><button class="btn" id="i-margin">% ' + t('setByMargin') + '</button><button class="btn" id="i-exp">⬇ Excel</button>') +
+  m.innerHTML = head(t('nav_items'), '<button class="btn primary" id="i-add">+ ' + t('addItem') + '</button>' + (can('marginTool') ? '<button class="btn" id="i-margin">% ' + t('setByMargin') + '</button>' : '') + '<button class="btn" id="i-exp">⬇ Excel</button>') +
     '<div class="bar"><input id="i-q" placeholder="' + t('search') + '" value="' + esc(st.q) + '"><select id="i-f"><option value="all">' + t('all') + '</option><option value="noprice">' + t('noPrice') + '</option><option value="low">' + t('lowStock') + '</option></select><span class="muted" id="itcount"></span></div><div id="itbody"></div>';
   $('#i-f', m).value = st.filter; draw();
   m.oninput = (e) => { if (e.target.id === 'i-q') { st.q = e.target.value; draw(); } };
@@ -28,14 +28,14 @@ Views.items = function (m) {
     if (e.target.id === 'i-add') itemModal(null, () => Views.items(m)); const ed = e.target.closest('[data-edit]'); if (ed) itemModal(App.db.items.find((x) => x.id === ed.dataset.edit), () => draw());
     const ad = e.target.closest('[data-adj]'); if (ad) stockAdjust(App.db.items.find((x) => x.id === ad.dataset.adj), draw);
     if (e.target.id === 'i-margin') marginModal(draw);
-    if (e.target.id === 'i-exp') exportRows('items.xlsx', [[t('barcode'), t('name'), 'Name EN', t('group'), t('cost'), t('price'), t('stock')]].concat(App.db.items.map((i) => [i.barcode, i.name, i.nameEn || '', i.group || '', i.cost, i.price, i.stock])), [16, 30, 30, 16, 10, 10, 10]);
+    if (e.target.id === 'i-exp') exportRows('items.xlsx', [[t('barcode'), t('name'), 'Name EN', t('group')].concat(can('seeCost') ? [t('cost')] : []).concat([t('price'), t('stock')])].concat(App.db.items.map((i) => [i.barcode, i.name, i.nameEn || '', i.group || ''].concat(can('seeCost') ? [i.cost] : []).concat([i.price, i.stock]))), [16, 30, 30, 16, 10, 10, 10]);
   };
 };
 function itemModal(it, done) {
   const isNew = !it; it = it || { barcode: '', name: '', nameEn: '', group: '', unit: '', cost: 0, price: 0, stock: 0, minStock: App.db.settings.lowStockDefault };
   const groups = Array.from(new Set(App.db.items.map((i) => i.group).filter(Boolean)));
   const fields = [{ k: 'barcode', label: t('barcode'), first: true }, { k: 'name', label: t('name') }, { k: 'nameEn', label: t('nameEn') }, { k: 'group', label: t('group'), ph: groups.slice(0, 4).join(', ') }, { k: 'unit', label: t('unit') },
-    { k: 'cost', label: t('cost'), type: 'number', step: 'any' }, { k: 'price', label: t('price'), type: 'number', step: 'any' }, { k: 'minStock', label: t('minStock'), type: 'number', step: 'any' }, { k: 'plu', label: t('plu'), ph: t('pluHint') }]
+    { k: 'cost', label: t('cost'), type: 'number', step: 'any', hidden: !can('seeCost') }, { k: 'price', label: t('price'), type: 'number', step: 'any' }, { k: 'minStock', label: t('minStock'), type: 'number', step: 'any' }, { k: 'plu', label: t('plu'), ph: t('pluHint') }]
     .concat(isNew ? [{ k: 'stock', label: t('openingStock'), type: 'number', step: 'any' }] : [])
     .concat([{ k: 'byWeight', type: 'check', label: '', hint: t('byWeight') }, { k: 'taxExempt', type: 'check', label: '', hint: t('taxExempt') }, { k: 'service', type: 'check', label: '', hint: t('serviceItem') }, { k: 'serialTracked', type: 'check', label: '', hint: t('serialTracked') }, { k: 'active', type: 'check', label: '', hint: t('active'), def: true }]);
   const vals = Object.assign({}, it, { active: it.active !== false });
@@ -45,7 +45,7 @@ function itemModal(it, done) {
       if (!v.name) { toast(t('nameRequired'), 'err'); return false; } if (!v.barcode) v.barcode = Core.autoBarcode(App.db);
       if (App.db.items.some((x) => x.barcode === v.barcode && x !== it)) { toast(t('barcodeExists'), 'err'); return false; }
       if ((v.cost || 0) < 0 || (v.price || 0) < 0) { toast(t('invalidValue'), 'err'); return false; }
-      Object.assign(it, { barcode: v.barcode, name: v.name, nameEn: v.nameEn, group: v.group, unit: v.unit, cost: v.cost || 0, price: v.price || 0, minStock: v.minStock == null ? 0 : v.minStock, plu: v.plu, byWeight: v.byWeight, taxExempt: v.taxExempt, service: v.service, serialTracked: v.serialTracked || it.serialTracked && (it.serials || []).length > 0, active: v.active });
+      Object.assign(it, { barcode: v.barcode, name: v.name, nameEn: v.nameEn, group: v.group, unit: v.unit, cost: can('seeCost') ? (v.cost || 0) : (it.cost || 0), price: v.price || 0, minStock: v.minStock == null ? 0 : v.minStock, plu: v.plu, byWeight: v.byWeight, taxExempt: v.taxExempt, service: v.service, serialTracked: v.serialTracked || it.serialTracked && (it.serials || []).length > 0, active: v.active });
       if (isNew) { Object.assign(it, { id: Core.uid('it'), stock: v.stock || 0, batches: [], serials: [], batchTracked: false, created: new Date().toISOString() }); App.db.items.push(it); }
       save(); done(); } }], enter: 1 });
   m.addEventListener('click', (e) => { if (e.target.id === 'gen') $('[name=barcode]', m).value = Core.autoBarcode(App.db); });
@@ -207,13 +207,14 @@ Views.history = function (m) {
     rows = rows.slice().reverse().slice(0, 300);
     $('#hb', m).innerHTML = table([t('no'), t('date'), t('type'), t('cashier'), t('customer'), t('total'), t('status'), ''], rows.map((s) => {
       const amt = s.type === 'return' ? -s.refund : s.total;
-      return '<tr class="' + (s.status === 'voided' ? 'dim' : '') + '"><td>' + s.no + '</td><td>' + fmtDT(s.ts) + '</td><td>' + t(s.type) + (s.type === 'return' ? ' <small class="muted">' + esc(s.saleNo) + '</small>' : '') + '</td><td>' + esc(s.userName) + '</td><td>' + esc(s.customerName || '') + '</td><td class="' + (amt < 0 ? 'bad' : '') + '">' + money(amt) + '</td><td>' + t(s.status) + '</td><td class="nw"><button class="btn sm" data-pr="' + s.id + '">🖨</button>' + (s.type === 'sale' && s.status !== 'voided' ? ' <button class="btn sm" data-ret="' + s.id + '">↩ ' + t('return') + '</button>' : '') + (s.type === 'sale' && s.status !== 'voided' && isMgr() ? ' <button class="btn sm danger" data-vd="' + s.id + '">' + t('void') + '</button>' : '') + '</td></tr>'; }));
+      return '<tr class="' + (s.status === 'voided' ? 'dim' : '') + '"><td>' + s.no + '</td><td>' + fmtDT(s.ts) + '</td><td>' + t(s.type) + (s.type === 'return' ? ' <small class="muted">' + esc(s.saleNo) + '</small>' : '') + '</td><td>' + esc(s.userName) + '</td><td>' + esc(s.customerName || '') + '</td><td class="' + (amt < 0 ? 'bad' : '') + '">' + money(amt) + '</td><td>' + t(s.status) + (s.rev ? ' <span class="tag w">' + t('rcRevised') + ' ' + s.rev + '</span>' : '') + '</td><td class="nw"><button class="btn sm" data-pr="' + s.id + '">🖨</button>' + (s.type === 'sale' && s.status !== 'voided' ? ' <button class="btn sm" data-ret="' + s.id + '">↩ ' + t('return') + '</button>' : '') + (s.type === 'sale' && s.status !== 'voided' && !Core.editBlockers(App.db, s).length ? ' <button class="btn sm" data-ed="' + s.id + '">✎ ' + t('editInvoice') + '</button>' : '') + (s.type === 'sale' && s.status !== 'voided' && can('voidInvoice') && !Core.shiftClosedFor(App.db, s) ? ' <button class="btn sm danger" data-vd="' + s.id + '">' + t('void') + '</button>' : '') + '</td></tr>'; }));
   };
   m.innerHTML = head(t('nav_history')) + '<div class="bar"><input id="h-q" placeholder="' + t('invoiceOrCustomer') + '" value="' + esc(st.q) + '"><input type="date" id="h-f" value="' + st.from + '"><input type="date" id="h-t" value="' + st.to + '"></div><div id="hb"></div>'; draw();
   m.oninput = (e) => { if (e.target.id === 'h-q') st.q = e.target.value; if (e.target.id === 'h-f') st.from = e.target.value; if (e.target.id === 'h-t') st.to = e.target.value; draw(); };
   m.onclick = async (e) => {
     const pr = e.target.closest('[data-pr]'); if (pr) { const d = App.db.sales.find((x) => x.id === pr.dataset.pr); return printChoice(d); }
     const rt = e.target.closest('[data-ret]'); if (rt) return returnModal(App.db.sales.find((x) => x.id === rt.dataset.ret), draw);
+    const ed = e.target.closest('[data-ed]'); if (ed) return editInvoiceModal(App.db.sales.find((x) => x.id === ed.dataset.ed), draw);
     const vd = e.target.closest('[data-vd]'); if (vd && await confirmBox(t('voidSaleQ'))) { try { Core.voidSale(App.db, vd.dataset.vd, App.user, ''); await save(true); draw(); } catch (er) { toast(errMsg(er), 'err'); } }
   };
 };
@@ -254,6 +255,7 @@ Views.shift = function (m) {
     const z = e.target.closest('[data-z]'); if (z) printZ(App.db.shifts.find((x) => x.id === z.dataset.z));
   };
 };
+const PERM_LABELS = {"sell": ["البيع", "Sell"], "discountUpTo": ["خصم في الحد المسموح", "Discount within limit"], "discountAbove": ["خصم فوق الحد", "Discount above limit"], "priceOverride": ["تغيير سعر الصنف", "Change item price"], "voidLine": ["حذف سطر من الفاتورة", "Remove a cart line"], "customers": ["العملاء", "Customers"], "returnInWindow": ["مرتجع داخل المدة", "Return inside window"], "returnAfterWindow": ["مرتجع بعد المدة", "Return after window"], "exchangeReceipt": ["إشعار استبدال", "Exchange receipt"], "reprint": ["إعادة طباعة", "Reprint"], "editInvoice": ["تعديل فاتورة", "Edit invoice"], "voidInvoice": ["إلغاء فاتورة (شيفت مفتوح)", "Void invoice (open shift)"], "shiftOwn": ["شيفته الخاص", "Own shift"], "cashMove": ["إيداع/سحب كاش", "Cash in/out"], "cashOutAbove": ["سحب فوق الحد", "Cash-out above limit"], "seeExpected": ["يشوف المتوقع عند القفل", "See expected cash at close"], "viewOtherShifts": ["شيفتات الآخرين", "Other users shifts"], "openDrawer": ["فتح الدرج", "Open drawer"], "viewItems": ["عرض الأصناف", "View items"], "editItems": ["تعديل الأصناف", "Edit items"], "seeCost": ["التكلفة والربح", "Cost and profit"], "promos": ["العروض", "Offers"], "importPurchases": ["استيراد المشتريات", "Import purchases"], "marginTool": ["تسعير بالهامش", "Price by margin"], "reports": ["التقارير", "Reports"], "logs": ["سجل التعديلات", "Edit log"], "approve": ["يعتمد بالـ PIN", "Approve by PIN"], "settings": ["الإعدادات", "Settings"], "users": ["المستخدمين", "Users"], "backup": ["النسخ الاحتياطي", "Backup"]};
 const stat = (l, v) => '<div class="stat"><span>' + l + '</span><b>' + v + '</b></div>';
 function cashMoveModal(kind) {
   const fields = [{ k: 'amount', label: t('amount'), type: 'number', step: 'any', first: true }, { k: 'reason', label: t('reason') }];
@@ -264,11 +266,11 @@ function cashMoveModal(kind) {
 }
 function closeShiftModal() {
   const sum = Core.shiftSummary(App.db, App.shift); const fields = [{ k: 'counted', label: t('countedCash'), type: 'number', step: 'any', first: true }, { k: 'note', label: t('note') }];
-  const m = modal({ title: t('closeShift'), body: '<div class="paytot">' + t('expectedCash') + ': <b>' + money(sum.expectedCash) + '</b></div><div class="grid2">' + form(fields) + '</div><div id="dif" class="paystat"></div>', buttons: [{ label: t('cancel') }, { label: t('closeShift'), cls: 'primary', onClick: async (w) => {
+  const m = modal({ title: t('closeShift'), body: '<div class="paytot">' + (can('seeExpected') ? t('expectedCash') + ': <b>' + money(sum.expectedCash) + '</b>' : t('blindCount')) + '</div><div class="grid2">' + form(fields) + '</div><div id="dif" class="paystat"></div>', buttons: [{ label: t('cancel') }, { label: t('closeShift'), cls: 'primary', onClick: async (w) => {
     const v = readForm(w, fields); if (v.counted == null || v.counted < 0) { toast(t('invalidValue'), 'err'); return false; } const diff = Core.r2(v.counted - sum.expectedCash);
     if (Math.abs(diff) > 0.009 && !v.note) { toast(t('diffNeedsNote'), 'err'); return false; }
     const sh = Core.closeShift(App.db, App.shift, v.counted, v.note); await save(true); App.shift = null; Views.shift($('#main')); printZ(sh); } }], enter: 1 });
-  m.addEventListener('input', () => { const v = Core.num($('[name=counted]', m).value); const d = isNaN(v) ? null : Core.r2(v - sum.expectedCash); $('#dif', m).innerHTML = d == null ? '' : '<span class="' + (Math.abs(d) > 0.009 ? 'bad' : 'good') + '">' + t('difference') + ': ' + money(d) + '</span>'; });
+  m.addEventListener('input', () => { const v = Core.num($('[name=counted]', m).value); const d = isNaN(v) || !can('seeExpected') ? null : Core.r2(v - sum.expectedCash); $('#dif', m).innerHTML = d == null ? '' : '<span class="' + (Math.abs(d) > 0.009 ? 'bad' : 'good') + '">' + t('difference') + ': ' + money(d) + '</span>'; });
 }
 function printZ(sh) {
   const s = sh.summary || Core.shiftSummary(App.db, sh); const l = App.db.settings.receiptLang; const m = (n) => money(n, l);
@@ -281,18 +283,18 @@ function printZ(sh) {
 // ---------------- Reports ----------------
 Views.reports = function (m) {
   const st = App.edit && App.edit.rep || (App.edit = Object.assign(App.edit || {}, { rep: { tab: 'dash', from: Core.today(new Date(Date.now() - 29 * 86400000)), to: Core.today(), days: App.db.settings.slowDays } })).rep;
-  const tabs = ['dash', 'sales', 'slow', 'low', 'expiry', 'stockval'];
+  const tabs = ['dash', 'sales', 'slow', 'low', 'expiry'].concat(can('seeCost') ? ['stockval'] : []);
   const draw = () => {
     const b = $('#rb', m); const s = App.db.settings;
     if (st.tab === 'dash') { const td = Core.salesReport(App.db, Core.today(), Core.today()); const mo = Core.salesReport(App.db, Core.today().slice(0, 8) + '01', Core.today());
       const low = Core.lowStock(App.db).length, slow = Core.slowMoving(App.db, s.slowDays).length, exp = Core.expiring(App.db, s.expiryWarnDays).length;
-      b.innerHTML = '<div class="stats big">' + stat(t('todaySales'), money(td.net)) + stat(t('todayCount'), td.count) + stat(t('todayProfit'), money(td.profit)) + stat(t('monthSales'), money(mo.net)) + stat(t('monthProfit'), money(mo.profit)) + '</div><div class="stats">' + stat(t('lowStock'), '<a href="#" data-go="low">' + low + '</a>') + stat(t('slowItems'), '<a href="#" data-go="slow">' + slow + '</a>') + stat(t('expiringSoon'), '<a href="#" data-go="expiry">' + exp + '</a>') + '</div>'; }
+      b.innerHTML = '<div class="stats big">' + stat(t('todaySales'), money(td.net)) + stat(t('todayCount'), td.count) + (can('seeCost') ? stat(t('todayProfit'), money(td.profit)) : '') + stat(t('monthSales'), money(mo.net)) + (can('seeCost') ? stat(t('monthProfit'), money(mo.profit)) : '') + '</div><div class="stats">' + stat(t('lowStock'), '<a href="#" data-go="low">' + low + '</a>') + stat(t('slowItems'), '<a href="#" data-go="slow">' + slow + '</a>') + stat(t('expiringSoon'), '<a href="#" data-go="expiry">' + exp + '</a>') + '</div>'; }
     if (st.tab === 'sales') { const r = Core.salesReport(App.db, st.from, st.to);
-      b.innerHTML = '<div class="bar"><input type="date" id="r-f" value="' + st.from + '"><input type="date" id="r-t" value="' + st.to + '"><button class="btn" id="r-x">⬇ Excel</button></div><div class="stats">' + stat(t('salesCount'), r.count) + stat(t('grossSales'), money(r.total)) + stat(t('refunds'), money(r.refunds)) + stat(t('netSales'), money(r.net)) + stat('VAT', money(r.tax)) + stat(t('cogs'), money(r.cogs)) + stat(t('profit'), '<b>' + money(r.profit) + '</b>') + '</div>' +
+      b.innerHTML = '<div class="bar"><input type="date" id="r-f" value="' + st.from + '"><input type="date" id="r-t" value="' + st.to + '"><button class="btn" id="r-x">⬇ Excel</button></div><div class="stats">' + stat(t('salesCount'), r.count) + stat(t('grossSales'), money(r.total)) + stat(t('refunds'), money(r.refunds)) + stat(t('netSales'), money(r.net)) + stat('VAT', money(r.tax)) + (can('seeCost') ? stat(t('cogs'), money(r.cogs)) + stat(t('profit'), '<b>' + money(r.profit) + '</b>') : '') + '</div>' +
         '<div class="grid2"><div>' + table([t('date'), t('total')], Object.keys(r.byDay).sort().map((d) => '<tr><td>' + d + '</td><td>' + money(r.byDay[d]) + '</td></tr>')) + '</div><div>' + table([t('group'), t('total')], Object.keys(r.byGroup).sort((a, b2) => r.byGroup[b2] - r.byGroup[a]).map((g) => '<tr><td>' + esc(g) + '</td><td>' + money(r.byGroup[g]) + '</td></tr>')) + '</div></div>'; }
     if (st.tab === 'slow') { const rows = Core.slowMoving(App.db, st.days);
-      b.innerHTML = '<div class="bar"><label>' + t('noSaleDays') + '</label><input type="number" id="r-d" min="1" value="' + st.days + '" style="width:90px"><button class="btn" id="r-x">⬇ Excel</button><button class="btn primary" id="r-promo">🏷️ ' + t('makePromoFromSlow') + '</button></div><div class="stats">' + stat(t('items'), rows.length) + stat(t('stockValue'), money(rows.reduce((a, x) => a + x.stockValue, 0))) + '</div>' +
-        table([t('barcode'), t('name'), t('group'), t('stock'), t('stockValue'), t('lastSold'), t('daysSince')], rows.map((x) => '<tr><td>' + esc(x.barcode) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.group) + '</td><td>' + x.stock + '</td><td>' + money(x.stockValue) + '</td><td>' + (x.lastSold ? fmtDT(x.lastSold) : t('never')) + '</td><td>' + (x.daysSince == null ? '∞' : x.daysSince) + '</td></tr>')); b._rows = rows; }
+      b.innerHTML = '<div class="bar"><label>' + t('noSaleDays') + '</label><input type="number" id="r-d" min="1" value="' + st.days + '" style="width:90px"><button class="btn" id="r-x">⬇ Excel</button><button class="btn primary" id="r-promo">🏷️ ' + t('makePromoFromSlow') + '</button></div><div class="stats">' + stat(t('items'), rows.length) + (can('seeCost') ? stat(t('stockValue'), money(rows.reduce((a, x) => a + x.stockValue, 0))) : '') + '</div>' +
+        table([t('barcode'), t('name'), t('group'), t('stock')].concat(can('seeCost') ? [t('stockValue')] : []).concat([t('lastSold'), t('daysSince')]), rows.map((x) => '<tr><td>' + esc(x.barcode) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.group) + '</td><td>' + x.stock + '</td>' + (can('seeCost') ? '<td>' + money(x.stockValue) + '</td>' : '') + '<td>' + (x.lastSold ? fmtDT(x.lastSold) : t('never')) + '</td><td>' + (x.daysSince == null ? '∞' : x.daysSince) + '</td></tr>')); b._rows = rows; }
     if (st.tab === 'low') b.innerHTML = table([t('barcode'), t('name'), t('stock'), t('minStock')], Core.lowStock(App.db).map((i) => '<tr><td>' + esc(i.barcode) + '</td><td>' + esc(i.name) + '</td><td class="bad">' + i.stock + '</td><td>' + i.minStock + '</td></tr>'));
     if (st.tab === 'expiry') b.innerHTML = '<p class="muted">' + t('withinDays', { n: s.expiryWarnDays }) + '</p>' + table([t('name'), t('batch'), t('expiry'), t('qty')], Core.expiring(App.db, s.expiryWarnDays).map((x) => '<tr><td>' + esc(x.item.name) + '</td><td>' + esc(x.batch.batch) + '</td><td class="' + (x.batch.expiry < Core.today() ? 'bad' : '') + '">' + x.batch.expiry + '</td><td>' + x.batch.qty + '</td></tr>'));
     if (st.tab === 'stockval') { const rows = App.db.items.filter((i) => !i.service && i.stock > 0); const tc = rows.reduce((a, i) => a + i.stock * i.cost, 0), tp = rows.reduce((a, i) => a + i.stock * i.price, 0);
@@ -320,6 +322,7 @@ Views.settings = function (m) {
   ];
   const vals = Object.assign({}, s, { receiptWidth: String(s.receiptWidth), accent: s.accent || '#2563eb' });
   m.innerHTML = head(t('nav_settings'), '<button class="btn primary" id="st-save">' + t('save') + '</button>') + F.map((g) => '<div class="card"><h3>' + t('sg_' + g[0]) + '</h3><div class="grid3">' + form(g[1], vals) + '</div></div>').join('') +
+    (can('settings') ? '<div class="card" id="perm-card"><h3>🔑 ' + t('permMatrix') + '</h3><p class="muted">Y = ' + sb('مسموح', 'allowed') + ' · A = ' + sb('بموافقة مدير', 'needs approval') + ' · N = ' + sb('ممنوع', 'denied') + '</p>' + permMatrixHTML() + '</div><div class="card"><h3>' + t('editLog') + '</h3>' + editLogHTML() + '</div>' : '') +
     '<div class="card"><h3>' + t('users') + '</h3><div id="ulist"></div><button class="btn" id="u-add">+ ' + t('addUser') + '</button></div>' +
     '<div class="card" id="sec-card"><h3>🔐 ' + sb('حماية البيانات', 'Data protection') + '</h3><p class="muted" id="sec-state"></p><div class="row"><button class="btn" id="sec-mode"></button><button class="btn" id="sec-change">' + sb('تغيير كلمة السر', 'Change passphrase') + '</button></div></div>' +
     '<div class="card"><h3>' + t('backup') + '</h3><p class="muted">' + t('backupInfo') + '</p><div class="row"><button class="btn" id="b-now">💾 ' + t('backupNow') + '</button><button class="btn" id="b-res">♻ ' + t('restore') + '</button><button class="btn" id="b-dir">📁 ' + t('chooseFolder') + '</button><span class="muted">' + esc(s.backupDir || t('defaultFolder')) + '</span></div><div class="muted sm" id="dpath"></div></div>';
@@ -327,6 +330,7 @@ Views.settings = function (m) {
   window.api.info().then((i) => { const el = $('#dpath', m); if (el) el.textContent = t('dataFile') + ': ' + i.dataFile + ' · v' + i.version; });
   const drawUsers = () => { $('#ulist', m).innerHTML = table([t('name'), t('role'), t('active'), ''], App.db.users.map((u) => '<tr><td>' + esc(u.name) + '</td><td>' + t(u.role) + '</td><td>' + (u.active !== false ? '✓' : '') + '</td><td><button class="btn sm" data-ue="' + u.id + '">✎</button></td></tr>')); }; drawUsers();
   const all = F.reduce((a, g) => a.concat(g[1]), []);
+  m.addEventListener('change', async (e) => { if (e.target.matches && e.target.matches('select[data-pm]')) { const [r, k] = e.target.dataset.pm.split('.'); App.db.settings.permissions[r][k] = e.target.value; await save(true); toast(t('saved')); } });
   m.onclick = async (e) => {
     if (e.target.id === 'st-save') {
       const v = readForm(m, all); const th0 = s.theme;
@@ -349,10 +353,10 @@ Views.settings = function (m) {
   };
 };
 function userModal(u, done) {
-  const isNew = !u; const fields = [{ k: 'name', label: t('name'), first: true }, { k: 'role', label: t('role'), type: 'select', opts: [['cashier', t('cashier')], ['manager', t('manager')]] }, { k: 'pin', label: isNew ? t('pin4') : t('newPinOpt'), type: 'password' }, { k: 'active', type: 'check', label: '', hint: t('active'), def: true }];
+  const isNew = !u; const fields = [{ k: 'name', label: t('name'), first: true }, { k: 'role', label: t('role'), type: 'select', opts: [['cashier', t('cashier')], ['manager', t('manager')], ['system', t('system')]] }, { k: 'pin', label: isNew ? t('pin4') : t('newPinOpt'), type: 'password' }, { k: 'active', type: 'check', label: '', hint: t('active'), def: true }];
   modal({ title: isNew ? t('addUser') : t('editUser'), body: '<div class="grid2">' + form(fields, u ? Object.assign({}, u, { pin: '', active: u.active !== false }) : {}) + '</div>', buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: (w) => {
     const v = readForm(w, fields); if (!v.name) { toast(t('nameRequired'), 'err'); return false; } if ((isNew || v.pin) && !/^\d{4,8}$/.test(v.pin)) { toast(t('pin4'), 'err'); return false; }
-    if (!isNew && (v.role !== 'manager' || !v.active) && u.role === 'manager' && App.db.users.filter((x) => x.role === 'manager' && x.active !== false).length < 2) { toast(t('lastManager'), 'err'); return false; }
+    if (!isNew && (v.role !== 'system' || !v.active) && u.role === 'system' && App.db.users.filter((x) => x.role === 'system' && x.active !== false).length < 2) { toast(t('lastManager'), 'err'); return false; }
     if (isNew) { const nu = Core.makeUser(v.name, v.pin, v.role); nu.active = v.active; App.db.users.push(nu); } else { u.name = v.name; u.role = v.role; u.active = v.active; if (v.pin) { u.salt = Math.random().toString(36).slice(2, 10); u.pinHash = Core.hashPin(v.pin, u.salt); } }
     save(true); done(); } }], enter: 1 });
 }
@@ -367,4 +371,35 @@ function changePassModal() {
       try { const r = await window.api.storeChangePass($('#cp-o', w).value, $('#cp-n', w).value);
         modal({ title: sb('مفتاح استرجاع جديد', 'New recovery key'), body: '<p>' + sb('المفتاح القديم بطل يشتغل. احتفظ بالجديد:', 'The old recovery key no longer works. Keep the new one:') + '</p><div class="recovery" dir="ltr">' + esc(r.recoveryKey) + '</div>' });
         return true; } catch (er) { $('#cp-err', w).textContent = er.message === 'WRONG_PASSPHRASE' ? sb('كلمة السر الحالية غلط', 'Current passphrase is wrong') : er.message === 'PASSPHRASE_SHORT' ? sb('أقل من 6 حروف', 'Too short') : er.message; return false; } } }] });
+}
+
+async function editInvoiceModal(sale, done) {
+  let appr = null;
+  if (!can('editInvoice')) { appr = await managerApproval(t('editApprove')); if (!appr || !Core.can(App.db, appr, 'editInvoice')) return; }
+  const linesOk = Core.editLinesAllowed(sale); const pm = (k) => sale.payments.filter((p) => p.method === k).reduce((x, p) => x + p.amount, 0);
+  const rows = sale.lines.map((l, i) => '<tr><td>' + esc(l.name) + '</td><td>' + (linesOk ? '<input class="eq" data-i="' + i + '" type="number" min="0" step="any" value="' + l.qty + '">' : l.qty) + '</td><td>' + (linesOk && can('priceOverride') ? '<input class="ep" data-i="' + i + '" type="number" min="0" step="any" value="' + l.price + '">' : money(l.price)) + '</td><td>' + (linesOk ? '<input class="ed" data-i="' + i + '" type="number" min="0" step="any" value="' + Core.r2(l.manualDisc || 0) + '">' : money(l.manualDisc || 0)) + '</td><td>' + money(l.total) + '</td></tr>').join('');
+  const m = modal({ title: t('editInvoiceT') + ' ' + sale.no, cls: 'wide', body: '<p class="muted">' + t('editNote') + '</p>' + (linesOk ? '' : '<p class="bad">' + t('editLinesOff') + '</p>') +
+    '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>' + t('name') + '</th><th>' + t('qty') + '</th><th>' + t('price') + '</th><th>' + t('discount') + '</th><th>' + t('total') + '</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="grid3">' + form([{ k: 'cash', label: t('pm_cash'), type: 'number', step: 'any', def: Core.r2(pm('cash')) }, { k: 'card', label: t('pm_card'), type: 'number', step: 'any', def: Core.r2(pm('card')) }, { k: 'other', label: t('pm_other'), type: 'number', step: 'any', def: Core.r2(pm('other')) }]) + '</div>' +
+    '<div class="grid2">' + form([{ k: 'reason', label: t('editReason') }]) + '</div>',
+    buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: async (w) => {
+      const f = readForm(w, [{ k: 'reason' }, { k: 'cash', type: 'number' }, { k: 'card', type: 'number' }, { k: 'other', type: 'number' }]);
+      const edits = { reason: f.reason };
+      if (linesOk) { const eq = $$('.eq', w), ep = $$('.ep', w), ed = $$('.ed', w); edits.lines = []; sale.lines.forEach((l, i) => { const q = Core.num(eq[i].value); if (q === 0) return; const e = { idx: i, qty: q, manualAmt: Core.num(ed[i].value) || 0 }; if (ep[i]) e.price = Core.num(ep[i].value); edits.lines.push(e); }); }
+      const pays = ['cash', 'card', 'other'].map((k) => ({ method: k, amount: f[k] || 0 })).filter((p) => p.amount > 0);
+      const changedPay = JSON.stringify(pays.map((p) => [p.method, Core.r2(p.amount)])) !== JSON.stringify(sale.payments.map((p) => [p.method, Core.r2(p.amount)]));
+      if (changedPay || !linesOk) edits.payments = pays;
+      else if (edits.lines && sale.payments.length > 1) edits.payments = pays;
+      try { const r = Core.editSale(App.db, sale.id, edits, App.user, { approvedBy: appr }); Store.markDirty(App.db, 'sales', sale.id); await save(true); toast(t('cashDiffIs') + ': ' + money(r.cashDiff)); done && done(); printReceipt(sale, App.db.settings.receiptLang); } catch (er) { toast(errMsg(er), 'err'); return false; } } }], enter: 0 });
+}
+
+function permMatrixHTML() {
+  const P = App.db.settings.permissions; const roles = ['cashier', 'manager', 'system'];
+  const sel = (r, k, val) => { const locked = r === 'system' && Core.LOCKED_PERMS.indexOf(k) >= 0; return '<select data-pm="' + r + '.' + k + '"' + (r === 'system' ? ' disabled' : '') + '>' + ['Y', 'A', 'N'].map((x) => '<option' + (x === val ? ' selected' : '') + '>' + x + '</option>').join('') + '</select>'; };
+  return table([t('name')].concat(roles.map((r) => t(r))), Core.PERMS.map((p) => '<tr><td>' + esc(sb(PERM_LABELS[p[0]][0], PERM_LABELS[p[0]][1])) + '</td>' + roles.map((r) => '<td>' + sel(r, p[0], P[r][p[0]]) + '</td>').join('') + '</tr>'));
+}
+function editLogHTML() {
+  const rows = (App.db.edits || []).slice().reverse().slice(0, 100);
+  if (!rows.length) return '<p class="muted">—</p>';
+  return table([t('date'), t('no'), t('cashier'), t('editReason'), t('total'), t('cashDiffIs')], rows.map((x) => '<tr><td>' + fmtDT(x.ts) + '</td><td>' + esc(x.saleNo) + ' <small>v' + x.rev + '</small></td><td>' + esc(x.user) + (x.approvedBy ? ' <small>(' + esc(x.approvedBy) + ')</small>' : '') + '</td><td>' + esc(x.reason) + '</td><td>' + money(x.before.total) + ' → ' + money(x.after.total) + '</td><td>' + money(x.cashDiff) + (x.shiftClosed ? ' <small>' + sb('شيفت مقفول', 'closed shift') + '</small>' : '') + '</td></tr>'));
 }

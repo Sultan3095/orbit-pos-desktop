@@ -645,6 +645,7 @@
     db.edits.push(log); Core.touchSale && Core.touchSale(db, sale);
     return { sale, log, cashDiff };
   };
+  Core.shiftClosedFor = function (db, sale) { const sh = sale.shiftId && db.shifts.find((x) => x.id === sale.shiftId); return !!(sh && sh.closedAt); };
   Core.touchSale = function (db, sale) { (db._dirty = db._dirty || {}); (db._dirty.sales = db._dirty.sales || []).push(sale.id); };
 
   // ---------- shifts ----------
