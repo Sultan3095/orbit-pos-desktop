@@ -321,7 +321,9 @@ Views.settings = function (m) {
   const vals = Object.assign({}, s, { receiptWidth: String(s.receiptWidth), accent: s.accent || '#2563eb' });
   m.innerHTML = head(t('nav_settings'), '<button class="btn primary" id="st-save">' + t('save') + '</button>') + F.map((g) => '<div class="card"><h3>' + t('sg_' + g[0]) + '</h3><div class="grid3">' + form(g[1], vals) + '</div></div>').join('') +
     '<div class="card"><h3>' + t('users') + '</h3><div id="ulist"></div><button class="btn" id="u-add">+ ' + t('addUser') + '</button></div>' +
+    '<div class="card" id="sec-card"><h3>🔐 ' + sb('حماية البيانات', 'Data protection') + '</h3><p class="muted" id="sec-state"></p><div class="row"><button class="btn" id="sec-mode"></button><button class="btn" id="sec-change">' + sb('تغيير كلمة السر', 'Change passphrase') + '</button></div></div>' +
     '<div class="card"><h3>' + t('backup') + '</h3><p class="muted">' + t('backupInfo') + '</p><div class="row"><button class="btn" id="b-now">💾 ' + t('backupNow') + '</button><button class="btn" id="b-res">♻ ' + t('restore') + '</button><button class="btn" id="b-dir">📁 ' + t('chooseFolder') + '</button><span class="muted">' + esc(s.backupDir || t('defaultFolder')) + '</span></div><div class="muted sm" id="dpath"></div></div>';
+  window.api.storeInfo().then((i) => { $('#sec-state', m).textContent = sb('البيانات مشفّرة (SQLite + AES). ', 'Data is encrypted (SQLite + AES). ') + (i.mode === 'os' ? sb('بتفتح تلقائي على الجهاز ده.', 'Opens automatically on this PC.') : sb('بيسأل عن كلمة السر كل مرة.', 'Asks for the passphrase each launch.')); $('#sec-mode', m).textContent = i.mode === 'os' ? sb('اسأل كل مرة', 'Ask every launch') : sb('تذكّر على الجهاز', 'Remember on this PC'); $('#sec-mode', m).style.display = (i.mode === 'os' || i.osAvailable) ? '' : 'none'; });
   window.api.info().then((i) => { const el = $('#dpath', m); if (el) el.textContent = t('dataFile') + ': ' + i.dataFile + ' · v' + i.version; });
   const drawUsers = () => { $('#ulist', m).innerHTML = table([t('name'), t('role'), t('active'), ''], App.db.users.map((u) => '<tr><td>' + esc(u.name) + '</td><td>' + t(u.role) + '</td><td>' + (u.active !== false ? '✓' : '') + '</td><td><button class="btn sm" data-ue="' + u.id + '">✎</button></td></tr>')); }; drawUsers();
   const all = F.reduce((a, g) => a.concat(g[1]), []);
@@ -336,7 +338,14 @@ Views.settings = function (m) {
     if (e.target.id === 'u-add') userModal(null, () => drawUsers()); const ue = e.target.closest('[data-ue]'); if (ue) userModal(App.db.users.find((x) => x.id === ue.dataset.ue), () => drawUsers());
     if (e.target.id === 'b-now') { await save(true); const p = await window.api.backupNow(); toast(p ? t('backupSaved') + ': ' + p : t('saveFail'), p ? '' : 'err'); }
     if (e.target.id === 'b-dir') { const d = await window.api.chooseDir(); if (d) { s.backupDir = d; await save(true); Views.settings(m); } }
-    if (e.target.id === 'b-res') { if (!await confirmBox(t('restoreQ'))) return; try { const text = await window.api.restore(); if (text) { App.db = JSON.parse(text); await save(true); toast(t('restored')); login(); } } catch (er) { toast(er.message, 'err'); } }
+    if (e.target.id === 'b-res') { if (!await confirmBox(t('restoreQ'))) return; try {
+      const f = await window.api.pickBackup(); if (!f) return; let secret = '';
+      if (/\.db$/i.test(f)) secret = await askSecret(sb('اكتب كلمة السر أو مفتاح الاسترجاع الخاص بالنسخة دي', 'Enter the passphrase or recovery key of this backup')); if (/\.db$/i.test(f) && !secret) return;
+      const text = await window.api.readBackup(f, secret); await window.api.replaceAll(text); App.db = JSON.parse(text); Store.prime(App.db);
+      const def = Core.defaultSettings(); for (const k in def) if (App.db.settings[k] === undefined) App.db.settings[k] = def[k];
+      toast(t('restored')); login(); } catch (er) { toast(er.message === 'WRONG_SECRET' ? sb('كلمة السر أو المفتاح غلط', 'Wrong passphrase or key') : er.message, 'err'); } }
+    if (e.target.id === 'sec-mode') { try { const cur = (await window.api.storeInfo()).mode; const nm = cur === 'os' ? 'prompt' : 'os'; await window.api.storeSetMode(nm); toast(sb('تم تغيير طريقة الفتح', 'Unlock mode changed')); Views.settings(m); } catch (er) { toast(er.message === 'OS_UNAVAILABLE' ? sb('الجهاز مش بيدعم الحفظ الآمن', 'This PC cannot store it securely') : er.message, 'err'); } }
+    if (e.target.id === 'sec-change') changePassModal();
   };
 };
 function userModal(u, done) {
@@ -346,4 +355,16 @@ function userModal(u, done) {
     if (!isNew && (v.role !== 'manager' || !v.active) && u.role === 'manager' && App.db.users.filter((x) => x.role === 'manager' && x.active !== false).length < 2) { toast(t('lastManager'), 'err'); return false; }
     if (isNew) { const nu = Core.makeUser(v.name, v.pin, v.role); nu.active = v.active; App.db.users.push(nu); } else { u.name = v.name; u.role = v.role; u.active = v.active; if (v.pin) { u.salt = Math.random().toString(36).slice(2, 10); u.pinHash = Core.hashPin(v.pin, u.salt); } }
     save(true); done(); } }], enter: 1 });
+}
+
+function askSecret(msg) {
+  return new Promise((res) => modal({ title: sb('كلمة السر', 'Passphrase'), body: '<p>' + esc(msg) + '</p><input id="as-in" type="password" autofocus>', enter: 0,
+    buttons: [{ label: t('ok'), cls: 'primary', onClick: (w) => { res($('#as-in', w).value); } }], onCancel: () => res('') }));
+}
+function changePassModal() {
+  modal({ title: sb('تغيير كلمة السر', 'Change passphrase'), body: '<label>' + sb('الحالية', 'Current') + '</label><input id="cp-o" type="password" autofocus><label>' + sb('الجديدة (6 حروف على الأقل)', 'New (at least 6 characters)') + '</label><input id="cp-n" type="password"><div id="cp-err" class="err"></div>',
+    buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: async (w) => {
+      try { const r = await window.api.storeChangePass($('#cp-o', w).value, $('#cp-n', w).value);
+        modal({ title: sb('مفتاح استرجاع جديد', 'New recovery key'), body: '<p>' + sb('المفتاح القديم بطل يشتغل. احتفظ بالجديد:', 'The old recovery key no longer works. Keep the new one:') + '</p><div class="recovery" dir="ltr">' + esc(r.recoveryKey) + '</div>' });
+        return true; } catch (er) { $('#cp-err', w).textContent = er.message === 'WRONG_PASSPHRASE' ? sb('كلمة السر الحالية غلط', 'Current passphrase is wrong') : er.message === 'PASSPHRASE_SHORT' ? sb('أقل من 6 حروف', 'Too short') : er.message; return false; } } }] });
 }

@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm test
+      - run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Electron end-to-end (real app, encrypted store)
+        run: xvfb-run -a npx electron --no-sandbox test/e2e.js
+        env: { E2E_OUT: shots }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: e2e-shots, path: shots }
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm test
+      - name: Package (unpacked) and check the native SQLite module is shipped
+        shell: bash
+        run: |
+          npx electron-builder --dir --publish never
+          find dist -name "*.node" -path "*better-sqlite3-multiple-ciphers*" | head
+          test -n "$(find dist -name '*.node' -path '*better-sqlite3-multiple-ciphers*' | head -1)"

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -8,26 +8,18 @@ const dataDir = () => app.getPath('userData');
 const dataFile = () => path.join(dataDir(), 'orbit-pos.json');
 const defaultBackupDir = () => path.join(dataDir(), 'backups');
 
-function atomicWrite(file, text) {
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, text);
-  const fd = fs.openSync(tmp, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  if (fs.existsSync(file)) { try { if (validDb(fs.readFileSync(file, 'utf8'))) fs.copyFileSync(file, file + '.bak'); } catch (e) {} } // never overwrite the good .bak with a corrupt file
-  fs.renameSync(tmp, file);
-}
-function backupDirFrom(json) {
-  try { const d = JSON.parse(json).settings.backupDir; if (d && fs.existsSync(d)) return d; } catch (e) {}
-  return defaultBackupDir();
-}
+const { Store } = require('./store-main.js');
+let store = null;
+const getStore = () => store || (store = new Store({ dir: dataDir(), safeStorage }));
+const stamp = () => new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+function backupDir() { try { const st = getStore(); if (st.db) { const r = st.db.prepare("select v from kv where k='settings'").get(); const d = r && JSON.parse(r.v).backupDir; if (d && fs.existsSync(d)) return d; } } catch (e) {} return defaultBackupDir(); }
+// encrypted backup (same key, restorable on another PC with the passphrase/recovery key); keeps the newest 40
 function doBackup(tag) {
-  const f = dataFile(); if (!fs.existsSync(f)) return null;
-  const json = fs.readFileSync(f, 'utf8');
-  const dir = backupDirFrom(json); fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
-  const out = path.join(dir, 'orbit-pos-' + stamp + (tag ? '-' + tag : '') + '.json');
-  fs.writeFileSync(out, json);
-  const all = fs.readdirSync(dir).filter((n) => /^orbit-pos-.*\.json$/.test(n)).sort();
-  while (all.length > 40) { try { fs.unlinkSync(path.join(dir, all.shift())); } catch (e) { break; } }
+  const st = getStore(); if (!st.db) return null;
+  const dir = backupDir(); fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, 'orbit-pos-' + stamp() + (tag ? '-' + tag : '') + '.db'); st.backupTo(out);
+  const all = fs.readdirSync(dir).filter((n) => /^orbit-pos-.*\.db$/.test(n)).sort();
+  while (all.length > 40) { const o = all.shift(); for (const x of [o, o + '.keys.json']) { try { fs.unlinkSync(path.join(dir, x)); } catch (e) { } } }
   return out;
 }
 
@@ -46,39 +38,36 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit(); else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(() => {
-    // daily automatic backup at start
-    try { const dir = defaultBackupDir(); const today = new Date().toISOString().slice(0, 10);
-      const has = fs.existsSync(dir) && fs.readdirSync(dir).some((n) => n.includes(today));
-      if (!has) doBackup('auto'); } catch (e) {}
     createWindow();
   });
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => { try { doBackup('exit'); } catch (e) {} });
+  app.on('before-quit', () => { try { doBackup('exit'); } catch (e) {} try { getStore().close(); } catch (e) {} });
 }
 
-const validDb = (t) => { try { const j = JSON.parse(t); return !!(j && Array.isArray(j.items) && j.settings); } catch (e) { return false; } };
-const readIf = (f) => { try { const t = fs.readFileSync(f, 'utf8'); return validDb(t) ? t : null; } catch (e) { return null; } };
-// main file first; if it is missing/truncated/corrupt fall back to .bak, then the newest backup. Never silently start empty over real data.
-ipcMain.handle('db:load', () => {
-  const f = dataFile();
-  if (!fs.existsSync(f) && !fs.existsSync(f + '.bak')) return null;
-  const a = readIf(f); if (a) return a;
-  const b = readIf(f + '.bak'); if (b) { try { fs.copyFileSync(f, f + '.corrupt-' + Date.now()); } catch (e) {} return b; }
-  try { const dir = defaultBackupDir(); const names = fs.readdirSync(dir).filter((n) => /^orbit-pos-.*\.json$/.test(n)).sort().reverse();
-    for (const n of names) { const c = readIf(path.join(dir, n)); if (c) return c; } } catch (e) {}
-  throw new Error('DATA_FILE_UNREADABLE');
-});
 ipcMain.on('pin:scrypt', (e, pin, salt) => { try { e.returnValue = require('crypto').scryptSync(String(pin), String(salt), 32).toString('hex'); } catch (err) { e.returnValue = null; } });
-ipcMain.on('db:saveSync', (e, json) => { try { atomicWrite(dataFile(), json); e.returnValue = true; } catch (err) { e.returnValue = false; } });
-ipcMain.handle('db:save', (_e, json) => { atomicWrite(dataFile(), json); return true; });
-ipcMain.handle('app:info', () => ({ dataFile: dataFile(), version: app.getVersion(), backupDir: defaultBackupDir() }));
+const needDb = () => { const st = getStore(); if (!st.db) throw new Error('LOCKED'); return st; };
+ipcMain.handle('store:info', () => getStore().info());
+ipcMain.handle('store:create', (_e, pass, mode) => { const st = getStore(); const r = st.create(pass, mode); r.migrated = st.migrateLegacy(); return r; });
+ipcMain.handle('store:unlock', (_e, secret) => { const st = getStore(); const ok = st.unlock(secret); if (ok) st.migrateLegacy(); return ok; });
+ipcMain.handle('store:setMode', (_e, mode) => needDb().setMode(mode));
+ipcMain.handle('store:changePass', (_e, o, n) => needDb().changePassphrase(o, n));
+let autoDone = false;
+function autoBackup() { if (autoDone) return; autoDone = true; try { const dir = backupDir(); const today = new Date().toISOString().slice(0, 10); if (!(fs.existsSync(dir) && fs.readdirSync(dir).some((n) => n.includes(today) && n.endsWith('.db')))) doBackup('auto'); } catch (e) {} }
+ipcMain.handle('db:load', () => { const st = needDb(); try { st.migrateLegacy(); } catch (e) { throw new Error('MIGRATION_FAILED'); } const out = st.isEmpty() ? null : JSON.stringify(st.loadAll()); setTimeout(autoBackup, 3000); return out; });
+ipcMain.handle('db:delta', (_e, d) => needDb().applyDelta(d));
+ipcMain.on('db:deltaSync', (e, d) => { try { needDb().applyDelta(d); e.returnValue = true; } catch (err) { e.returnValue = false; } });
+ipcMain.handle('db:replaceAll', (_e, text) => { const st = needDb(); doBackup('before-restore'); st.replaceAll(text); return true; });
+ipcMain.handle('app:info', () => ({ dataFile: getStore().dbFile, version: app.getVersion(), backupDir: defaultBackupDir() }));
 ipcMain.handle('backup:now', () => doBackup('manual'));
-ipcMain.handle('backup:restore', async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Orbit POS backup', extensions: ['json'] }], defaultPath: defaultBackupDir() });
-  if (r.canceled || !r.filePaths[0]) return null;
-  const text = fs.readFileSync(r.filePaths[0], 'utf8'); const j = JSON.parse(text);
-  if (!j || !Array.isArray(j.items) || !j.settings) throw new Error('Not an Orbit POS backup');
-  doBackup('before-restore'); return text;
+ipcMain.handle('backup:pick', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Orbit POS backup', extensions: ['db', 'json'] }], defaultPath: backupDir() });
+  return r.canceled || !r.filePaths[0] ? null : r.filePaths[0];
+});
+// .db = encrypted backup, needs the passphrase/recovery key; .json = old plaintext backup from before encryption
+ipcMain.handle('backup:read', (_e, file, secret) => {
+  needDb();
+  if (/\.json$/i.test(file)) { const text = fs.readFileSync(file, 'utf8'); const j = JSON.parse(text); if (!j || !Array.isArray(j.items) || !j.settings) throw new Error('Not an Orbit POS backup'); return text; }
+  const text = getStore().readBackup(file, secret); if (!text) throw new Error('WRONG_SECRET'); return text;
 });
 ipcMain.handle('dir:choose', async () => { const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] }); return r.canceled ? null : r.filePaths[0]; });
 

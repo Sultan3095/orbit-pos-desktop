@@ -41,3 +41,5 @@ input[type=checkbox]{width:auto}input[type=color]{padding:2px;height:38px}
 
 .modal-b .row{margin-top:10px}.modal-b .grid3+.row,.modal-b .grid2+.row{margin-top:12px}
 .offers { margin: 8px 0; } .offers .tag { margin-inline-end: 4px; }
+
+.sec-wrap{min-height:100vh;display:grid;place-items:center;padding:20px}.sec{width:min(520px,94vw);padding:24px}.sec input[type=password],.sec input[type=text]{width:100%;margin:6px 0 10px}.sec .err{color:#c0392b;min-height:20px;margin:6px 0}.recovery{font:700 20px monospace;letter-spacing:1px;padding:14px;border:2px dashed var(--line);border-radius:10px;text-align:center;margin:12px 0;user-select:all}.sec .chk{display:block;margin:8px 0}

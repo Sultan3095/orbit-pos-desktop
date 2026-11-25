@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/core.test.js && node test/i18n.test.js && node test/persist.test.js",
+    "test": "node test/core.test.js && node test/i18n.test.js && node test/store.test.js",
     "pack:win": "electron-packager . \"Orbit POS\" --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=\"^/(dist|test|shots|\\.github)\"",
     "dist": "electron-builder"
   },
@@ -16,6 +16,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "store-main.js",
       "src/**/*",
       "package.json"
     ],
@@ -27,16 +28,22 @@
     },
     "linux": {
       "target": "AppImage"
-    }
+    },
+    "asarUnpack": [
+      "node_modules/better-sqlite3-multiple-ciphers/**"
+    ],
+    "npmRebuild": true
   },
   "license": "UNLICENSED",
   "private": true,
   "devDependencies": {
     "@electron/packager": "^20.3.0",
-    "electron": "^33.4.11",
+    "@electron/rebuild": "^4.2.1",
+    "electron": "^37.10.3",
     "electron-builder": "^26.18.0"
   },
   "dependencies": {
+    "better-sqlite3-multiple-ciphers": "^13.2.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }

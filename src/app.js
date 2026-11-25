@@ -18,12 +18,15 @@ const itemName = (it, l) => ((l || lang()) === 'en' && it.nameEn) ? it.nameEn : 
 const isMgr = () => App.user && App.user.role === 'manager';
 
 let saveTimer = null, saving = Promise.resolve();
+// only the rows that changed since the last successful save go to the encrypted SQLite store
+function persist() { const x = Store.delta(App.db); if (!x) return Promise.resolve(); return window.api.delta(x.delta).then(() => x.commit()); }
 function save(now) {
-  const run = () => { saving = saving.then(() => window.api.save(JSON.stringify(App.db))).catch((e) => toast(t('saveFail') + ' ' + e.message, 'err')); return saving; };
+  const run = () => { saving = saving.then(persist).catch((e) => toast(t('saveFail') + ' ' + e.message, 'err')); return saving; };
   if (now) { clearTimeout(saveTimer); return run(); }
   clearTimeout(saveTimer); saveTimer = setTimeout(run, 400); return Promise.resolve();
 }
-window.addEventListener('beforeunload', () => { if (App.db) { try { window.api.saveSync(JSON.stringify(App.db)); } catch (e) { window.api.save(JSON.stringify(App.db)); } } }); // sync: an async save can be lost when the window is closing
+// sync on close: an async write can be lost while the window is closing
+window.addEventListener('beforeunload', () => { if (App.db) { const x = Store.delta(App.db); if (x && window.api.deltaSync(x.delta)) x.commit(); } });
 
 function toast(msg, kind) {
   const el = document.createElement('div'); el.className = 'toast ' + (kind || ''); el.textContent = msg;
@@ -95,13 +98,59 @@ function applyTheme() {
 }
 
 // ---------- boot ----------
+// ---------- data passphrase (encrypted store) ----------
+const sb = (ar, en) => (lang() === 'en' ? en : ar);
+function secShell(html) { const root = $('#app'); root.innerHTML = '<div class="sec-wrap"><div class="card sec">' + html + '</div></div>'; return root; }
+function secSetup(info) {
+  return new Promise((resolve) => {
+    const osOpt = info.osAvailable ? '<label class="chk"><input type="radio" name="sm" value="os" checked> ' + sb('تذكّر على الجهاز ده (محمي بحساب ويندوز) — مش هيسأل كل مرة', 'Remember on this PC (protected by your Windows account) - no prompt each launch') + '</label>' +
+      '<label class="chk"><input type="radio" name="sm" value="prompt"> ' + sb('اسأل عن كلمة السر كل مرة أفتح فيها البرنامج', 'Ask for the passphrase every time the app starts') + '</label>' : '<p class="muted">' + sb('الجهاز ده مش بيدعم الحفظ الآمن، فهيسأل عن كلمة السر كل مرة.', 'This PC cannot store it securely, so the app will ask each launch.') + '</p>';
+    const root = secShell('<h2>🔐 ' + sb('حماية ملف البيانات', 'Protect the data file') + '</h2><p>' + sb('بيانات المحل بتتحفظ مشفّرة على الجهاز. اختار كلمة سر (6 حروف على الأقل). هتاخد كمان مفتاح استرجاع لو نسيتها.', 'Shop data is stored encrypted on this PC. Choose a passphrase (at least 6 characters). You also get a recovery key in case you forget it.') + '</p>' +
+      (info.hasLegacy ? '<p class="ok-box">' + sb('لقينا بيانات قديمة غير مشفّرة، هتتنقل تلقائياً بعد الإنشاء.', 'Existing unencrypted data was found and will be imported automatically.') + '</p>' : '') +
+      '<label>' + sb('كلمة السر', 'Passphrase') + '</label><input id="sec-pass" type="password" autofocus><label>' + sb('أكّد كلمة السر', 'Confirm passphrase') + '</label><input id="sec-pass2" type="password">' + osOpt +
+      '<div id="sec-err" class="err"></div><div class="row"><button class="btn primary" id="sec-create">' + sb('إنشاء', 'Create') + '</button></div>');
+    const go = async () => {
+      const p = $('#sec-pass').value, p2 = $('#sec-pass2').value, err = $('#sec-err');
+      if (p.length < 6) { err.textContent = sb('كلمة السر أقل من 6 حروف', 'Passphrase is shorter than 6 characters'); return; }
+      if (p !== p2) { err.textContent = sb('كلمتا السر مش متطابقتين', 'Passphrases do not match'); return; }
+      const m = ($('input[name=sm]:checked') || {}).value || 'prompt';
+      let r; try { r = await window.api.storeCreate(p, m); } catch (e) { err.textContent = e.message; return; }
+      secShowRecovery(r.recoveryKey, resolve);
+    };
+    root.onclick = (e) => { if (e.target.id === 'sec-create') go(); }; root.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  });
+}
+function secShowRecovery(key, done) {
+  const root = secShell('<h2>🗝 ' + sb('مفتاح الاسترجاع', 'Recovery key') + '</h2><p>' + sb('اكتبه أو اطبعه واحتفظ بيه في مكان آمن بعيد عن الجهاز. لو نسيت كلمة السر ده الطريقة الوحيدة لفتح البيانات، ومش هيتعرض تاني.', 'Write it down or print it and keep it somewhere safe, away from this PC. If you forget the passphrase it is the only way to open your data, and it is not shown again.') + '</p>' +
+    '<div class="recovery" id="sec-recovery" dir="ltr">' + esc(key) + '</div><div class="row"><button class="btn" id="sec-print">🖨 ' + sb('طباعة', 'Print') + '</button></div>' +
+    '<label class="chk"><input type="checkbox" id="sec-saved"> ' + sb('حفظت مفتاح الاسترجاع', 'I saved the recovery key') + '</label><div class="row"><button class="btn primary" id="sec-continue" disabled>' + sb('متابعة', 'Continue') + '</button></div>');
+  root.onclick = (e) => {
+    if (e.target.id === 'sec-saved') $('#sec-continue').disabled = !e.target.checked;
+    if (e.target.id === 'sec-print') window.api.print('<html dir="rtl"><body style="font-family:sans-serif;padding:24px"><h2>Orbit POS - ' + sb('مفتاح الاسترجاع', 'Recovery key') + '</h2><p style="font:bold 22px monospace;direction:ltr">' + esc(key) + '</p><p>' + sb('احتفظ بالورقة دي في مكان آمن. أي حد معاه المفتاح يقدر يفتح البيانات.', 'Keep this page safe. Anyone with this key can open the data.') + '</p></body></html>', {});
+    if (e.target.id === 'sec-continue' && $('#sec-saved').checked) { root.onclick = null; done(); }
+  };
+}
+function secUnlock() {
+  return new Promise((resolve) => {
+    const root = secShell('<h2>🔐 ' + sb('البيانات مقفولة', 'Data is locked') + '</h2><p>' + sb('اكتب كلمة السر أو مفتاح الاسترجاع.', 'Enter your passphrase or recovery key.') + '</p><input id="sec-unlock-input" type="password" autofocus><div id="sec-err" class="err"></div><div class="row"><button class="btn primary" id="sec-unlock-btn">' + sb('فتح', 'Unlock') + '</button></div>');
+    const go = async () => { const ok = await window.api.storeUnlock($('#sec-unlock-input').value); if (ok) { root.onclick = null; resolve(); } else $('#sec-err').textContent = sb('كلمة السر أو المفتاح غلط', 'Wrong passphrase or key'); };
+    root.onclick = (e) => { if (e.target.id === 'sec-unlock-btn') go(); }; root.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+  });
+}
+async function ensureUnlocked() {
+  let info = await window.api.storeInfo();
+  while (info.status !== 'ready') { if (info.status === 'new') await secSetup(info); else await secUnlock(); info = await window.api.storeInfo(); }
+}
+
+// ---------- boot ----------
 async function boot() {
   let raw;
-  try { raw = await window.api.load(); } catch (e) {
-    document.body.innerHTML = '<div style="padding:40px;font:16px sans-serif;direction:rtl;text-align:center"><h2>تعذر قراءة ملف البيانات</h2><p>Data file could not be read. Nothing was changed. Restore from a backup (Settings > Backup) or contact support.</p></div>';
+  try { await ensureUnlocked(); raw = await window.api.load(); } catch (e) {
+    document.body.innerHTML = '<div style="padding:40px;font:16px sans-serif;direction:rtl;text-align:center"><h2>تعذر قراءة ملف البيانات</h2><p>Data could not be opened (' + esc(e.message) + '). Nothing was changed. Restore from a backup or contact support.</p></div>';
     return;
   }
   App.db = raw ? JSON.parse(raw) : Core.newDB();
+  if (raw) Store.prime(App.db); else Store.reset();
   const def = Core.defaultSettings(); for (const k in def) if (App.db.settings[k] === undefined) App.db.settings[k] = def[k];
   ['held', 'audit', 'customers', 'suppliers', 'promos', 'purchases', 'shifts', 'sales', 'items', 'users'].forEach((k) => { if (!App.db[k]) App.db[k] = []; });
   applyTheme();

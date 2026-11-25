@@ -22,6 +22,14 @@ app.whenReady().then(async () => {
   const errors = []; win.webContents.on('console-message', (_e, lvl, msg) => { if (lvl >= 3) errors.push(msg); });
   win.webContents.on('render-process-gone', () => { console.log('RENDERER GONE'); fails++; });
   try {
+    // 0. first run: data passphrase + recovery key (encrypted SQLite store)
+    check('first run asks for a data passphrase', await ev(`return !!document.querySelector('#sec-pass')`)); await shot('00-passphrase-setup');
+    await setv('#sec-pass', 'e2e-pass-123'); await setv('#sec-pass2', 'different'); await click('#sec-create'); await sleep(300);
+    check('mismatched passphrases are refused', await ev(`return document.querySelector('#sec-err').textContent.length>0 && !!document.querySelector('#sec-pass')`));
+    await setv('#sec-pass2', 'e2e-pass-123'); await click('#sec-create'); await sleep(1500);
+    check('recovery key is shown once (8 groups)', await ev(`return /^([A-Z2-9]{4}-){7}[A-Z2-9]{4}$/.test(document.querySelector('#sec-recovery').textContent)`)); await shot('00-recovery-key');
+    check('continue is disabled until the key is acknowledged', await ev(`return document.querySelector('#sec-continue').disabled===true`));
+    await click('#sec-saved'); await click('#sec-continue'); await sleep(800);
     // 1. wizard (Arabic default)
     await ev(`document.querySelector('[data-lang="ar"]')&&document.querySelector('[data-lang="ar"]').click()`);
     await setv('[name=storeName]', 'سوبر ماركت النور'); await setv('[name=name]', 'مدير'); await setv('[name=pin]', '1234'); await shot('01-wizard-ar');
@@ -164,8 +172,10 @@ app.whenReady().then(async () => {
     // used receipt rejected
     check('a used exchange receipt is rejected', await ev(`try{Core.checkExchangeReceipt(App.db,'${rx.no}');return false}catch(e){return e.message==='EXR_USED'}`));
     // 11. persistence: data file on disk has the data
-    const file = path.join(tmp, 'orbit-pos.json'); await ev(`await save(true); return 1`); await sleep(300);
-    const disk = JSON.parse(fs.readFileSync(file, 'utf8')); check('data persisted to disk', disk.sales.length >= 2 && disk.items.length >= 4);
+    await ev(`await save(true); return 1`); await sleep(300);
+    const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);
+    const raw = fs.readFileSync(path.join(tmp, 'orbit-pos.db')); check('database file on disk is encrypted', !raw.includes(Buffer.from('لبن كامل')) && !raw.slice(0, 16).toString('latin1').includes('SQLite format'));
+    check('no plaintext JSON data file exists', !fs.existsSync(path.join(tmp, 'orbit-pos.json')));
     check('no renderer console errors', errors.length === 0, errors.join(' | '));
   } catch (e) { console.log('E2E EXCEPTION', e.message); fails++; try { await shot('zz-error'); } catch (x) {} }
   console.log(fails ? 'E2E FAILED ' + fails : 'E2E ALL PASSED'); console.log('shots in ' + OUT);
