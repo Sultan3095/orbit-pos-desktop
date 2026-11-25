@@ -198,6 +198,19 @@ t('a returned serial cannot be returned twice (duplicate-serial hole)', () => {
   assert.throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1, serials: ['S3'] }], u, {}), /SERIAL_NOT_ON_SALE/);
   C.finalizeReturn(db, s.id, [{ idx: 0, qty: 1, serials: ['S2'] }], u, {});
 });
+t('partial returns of one line never refund more than the line total (cent drift)', () => {
+  const db = mk(); const u = db.users[0]; db.settings.returnWindowDays = 0;
+  const sale = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 3, 3.33)], invPct: 7 }, payments: pay(100), user: db.users[1] });
+  let sum = 0; for (let i = 0; i < 3; i++) sum = Math.round((sum + C.finalizeReturn(db, sale.id, [{ idx: 0, qty: 1 }], u, { method: 'cash' }).refund) * 100) / 100;
+  assert.strictEqual(sum, sale.total);
+});
+t('void reverses loyalty: earned points removed, redeemed points returned', () => {
+  const db = mk(); db.settings.loyaltyEnabled = true; db.settings.loyaltyEarnPerCurrency = 10; db.settings.loyaltyPointValue = 1;
+  db.customers.push({ id: 'c1', name: 'X', points: 50 });
+  const sale = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 5, 10)], redeemValue: 20 }, payments: pay(100), user: db.users[1], customerId: 'c1' });
+  const mid = db.customers[0].points; assert.ok(mid !== 50);
+  C.voidSale(db, sale.id, db.users[0], 'x'); assert.strictEqual(db.customers[0].points, 50);
+});
 console.log(n + ' passed');
 
 // ---- PIN hashing (scrypt) ----

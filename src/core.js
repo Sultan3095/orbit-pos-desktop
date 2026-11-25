@@ -475,8 +475,12 @@
         rs.forEach((sn) => { if (sale.returnedSerials.indexOf(sn) >= 0) { const e = new Error('SERIAL_ALREADY_RETURNED'); e.item = sn; throw e; } });
       }
       const ratio = r.qty / l.qty;
-      const val = r2(l.total * ratio);
-      const t = r2(l.tax * ratio);
+      // the last units of a line refund exactly what is left, so partial returns never add up to more (or less) than the line total
+      sale.refundedVal = sale.refundedVal || {}; sale.refundedTax = sale.refundedTax || {};
+      const lastUnits = r.qty >= left - 1e-9;
+      const val = lastUnits ? r2(l.total - (sale.refundedVal[r.idx] || 0)) : Math.min(r2(l.total * ratio), r2(l.total - (sale.refundedVal[r.idx] || 0)));
+      const t = lastUnits ? r2(l.tax - (sale.refundedTax[r.idx] || 0)) : Math.min(r2(l.tax * ratio), r2(l.tax - (sale.refundedTax[r.idx] || 0)));
+      sale.refundedVal[r.idx] = r2((sale.refundedVal[r.idx] || 0) + val); sale.refundedTax[r.idx] = r2((sale.refundedTax[r.idx] || 0) + t);
       refund = r2(refund + val); tax = r2(tax + t);
       sale.returned[r.idx] = r2((sale.returned[r.idx] || 0) + r.qty); Core.touchSale(db, sale);
       if (r.serials) sale.returnedSerials = sale.returnedSerials.concat(r.serials);
@@ -541,6 +545,10 @@
         if (split) { if (split.status !== 'open') throw new Error('EXR_LEFTOVER_USED'); split.status = 'cancelled'; }
         used.status = 'open'; delete used.redeemedIn; delete used.redeemedOn;
       }
+    }
+    if (db.settings.loyaltyEnabled && sale.customerId) { // a void takes back earned points and gives back redeemed ones
+      const c = db.customers.find((x) => x.id === sale.customerId);
+      if (c) c.points = r2(Math.max(0, (c.points || 0) - (sale.pointsEarned || 0) + (sale.redeemValue || 0) / (db.settings.loyaltyPointValue || 1)));
     }
     Core.touchSale(db, sale);
     sale.status = 'voided'; sale.voidReason = reason || ''; sale.voidBy = user.name; sale.voidTs = new Date().toISOString();
