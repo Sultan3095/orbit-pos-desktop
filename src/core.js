@@ -306,6 +306,10 @@
     const s = db.settings;
     const cart = input.cart;
     if (!cart.lines.length) throw new Error('EMPTY_CART');
+    // reject garbage before anything is touched: a negative/NaN qty would add stock or poison it with NaN
+    cart.lines.forEach((l) => { if (!Number.isFinite(l.qty) || !(l.qty > 0)) throw new Error('BAD_QTY'); if (!Number.isFinite(l.price) || l.price < 0) throw new Error('BAD_PRICE'); });
+    (input.payments || []).forEach((p) => { if (!Number.isFinite(p.amount) || p.amount < 0) throw new Error('BAD_PAYMENT'); });
+    if (input.shiftId) { const sh = db.shifts.find((x) => x.id === input.shiftId); if (!sh || sh.closedAt) throw new Error('SHIFT_CLOSED'); }
     const calc = Core.computeCart(cart, db.promos, s, now);
     let xr = null, credit = 0;
     if (input.exchangeReceiptNo) {
@@ -399,7 +403,7 @@
     now = now || new Date();
     if (sale.status === 'voided') return { ok: false, code: 'VOIDED' };
     const days = (now - new Date(sale.ts)) / 86400000;
-    if (days > db.settings.returnDays) {
+    if (db.settings.returnDays > 0 && days > db.settings.returnDays) { // 0 = no limit (same meaning as on the exchange receipt)
       if (user.role === 'manager' && db.settings.managerBypassReturnWindow) return { ok: true, late: true };
       return { ok: false, code: 'WINDOW', needManager: true };
     }
@@ -421,7 +425,7 @@
       const l = sale.lines[r.idx];
       if (!l) throw new Error('LINE_MISSING');
       const left = Core.returnableQty(sale, r.idx);
-      if (r.qty <= 0 || r.qty > left + 1e-9) throw new Error('QTY_EXCEEDS');
+      if (!Number.isFinite(r.qty) || !(r.qty > 0) || r.qty > left + 1e-9) throw new Error('QTY_EXCEEDS');
       if (l.exchangeOnly && method !== 'credit') { const e = new Error('PROMO_EXCHANGE_ONLY'); e.item = l.name; throw e; }
       if (l.serials && l.serials.length) {
         const rs = r.serials || [];
@@ -489,6 +493,14 @@
       });
       if (it.serialTracked) it.serials = (it.serials || []).concat(l.serials || []);
     });
+    if (sale.exchangeCredit) { // the customer's credit must not be burned by a void
+      const used = Core.findExchangeReceipt(db, sale.exchangeCredit.no);
+      if (used && used.redeemedIn === sale.no) {
+        const split = sale.newExchangeReceipt && Core.findExchangeReceipt(db, sale.newExchangeReceipt);
+        if (split) { if (split.status !== 'open') throw new Error('EXR_LEFTOVER_USED'); split.status = 'cancelled'; }
+        used.status = 'open'; delete used.redeemedIn; delete used.redeemedOn;
+      }
+    }
     sale.status = 'voided'; sale.voidReason = reason || ''; sale.voidBy = user.name; sale.voidTs = new Date().toISOString();
     return sale;
   };
@@ -501,7 +513,8 @@
     db.shifts.push(sh); return sh;
   };
   Core.cashMove = function (db, shift, kind, amount, reason, approvedBy) {
-    if (!(amount > 0)) throw new Error('BAD_AMOUNT');
+    if (shift.closedAt) throw new Error('SHIFT_CLOSED');
+    if (!(amount > 0) || !Number.isFinite(amount)) throw new Error('BAD_AMOUNT');
     if (kind !== 'in' && kind !== 'out') throw new Error('BAD_KIND');
     shift.moves.push({ ts: new Date().toISOString(), kind, amount: r2(amount), reason: reason || '', approvedBy: approvedBy || '' });
   };

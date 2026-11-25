@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('api', {
   info: () => ipcRenderer.invoke('app:info'), backupNow: () => ipcRenderer.invoke('backup:now'),
   restore: () => ipcRenderer.invoke('backup:restore'), chooseDir: () => ipcRenderer.invoke('dir:choose'),
   openSheet: () => ipcRenderer.invoke('xlsx:open'), saveSheet: (n, r, w) => ipcRenderer.invoke('xlsx:save', n, r, w),
+  saveSync: (j) => ipcRenderer.sendSync('db:saveSync', j),
   scrypt: (pin, salt) => ipcRenderer.sendSync('pin:scrypt', pin, salt),
   print: (html, o) => ipcRenderer.invoke('print:html', html, o),
   openDisplay: () => ipcRenderer.invoke('display:open'), updateDisplay: (p) => ipcRenderer.send('display:update', p),

@@ -12,7 +12,7 @@ function atomicWrite(file, text) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, text);
   const fd = fs.openSync(tmp, 'r'); try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-  if (fs.existsSync(file)) { try { fs.copyFileSync(file, file + '.bak'); } catch (e) {} }
+  if (fs.existsSync(file)) { try { if (validDb(fs.readFileSync(file, 'utf8'))) fs.copyFileSync(file, file + '.bak'); } catch (e) {} } // never overwrite the good .bak with a corrupt file
   fs.renameSync(tmp, file);
 }
 function backupDirFrom(json) {
@@ -56,9 +56,20 @@ if (!gotLock) app.quit(); else {
   app.on('before-quit', () => { try { doBackup('exit'); } catch (e) {} });
 }
 
-ipcMain.handle('db:load', () => { try { return fs.existsSync(dataFile()) ? fs.readFileSync(dataFile(), 'utf8') : null; } catch (e) {
-  try { return fs.readFileSync(dataFile() + '.bak', 'utf8'); } catch (e2) { return null; } } });
+const validDb = (t) => { try { const j = JSON.parse(t); return !!(j && Array.isArray(j.items) && j.settings); } catch (e) { return false; } };
+const readIf = (f) => { try { const t = fs.readFileSync(f, 'utf8'); return validDb(t) ? t : null; } catch (e) { return null; } };
+// main file first; if it is missing/truncated/corrupt fall back to .bak, then the newest backup. Never silently start empty over real data.
+ipcMain.handle('db:load', () => {
+  const f = dataFile();
+  if (!fs.existsSync(f) && !fs.existsSync(f + '.bak')) return null;
+  const a = readIf(f); if (a) return a;
+  const b = readIf(f + '.bak'); if (b) { try { fs.copyFileSync(f, f + '.corrupt-' + Date.now()); } catch (e) {} return b; }
+  try { const dir = defaultBackupDir(); const names = fs.readdirSync(dir).filter((n) => /^orbit-pos-.*\.json$/.test(n)).sort().reverse();
+    for (const n of names) { const c = readIf(path.join(dir, n)); if (c) return c; } } catch (e) {}
+  throw new Error('DATA_FILE_UNREADABLE');
+});
 ipcMain.on('pin:scrypt', (e, pin, salt) => { try { e.returnValue = require('crypto').scryptSync(String(pin), String(salt), 32).toString('hex'); } catch (err) { e.returnValue = null; } });
+ipcMain.on('db:saveSync', (e, json) => { try { atomicWrite(dataFile(), json); e.returnValue = true; } catch (err) { e.returnValue = false; } });
 ipcMain.handle('db:save', (_e, json) => { atomicWrite(dataFile(), json); return true; });
 ipcMain.handle('app:info', () => ({ dataFile: dataFile(), version: app.getVersion(), backupDir: defaultBackupDir() }));
 ipcMain.handle('backup:now', () => doBackup('manual'));

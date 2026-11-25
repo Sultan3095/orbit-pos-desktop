@@ -214,3 +214,41 @@ t('old weak PIN hash still logs in once and is upgraded to scrypt', () => {
   assert.ok(!C.checkPin(u, '0000')); assert.ok(!u.pinHash.startsWith('s1$'));
   assert.ok(C.checkPin(u, '5555')); assert.ok(u.pinHash.startsWith('s1$')); assert.ok(C.checkPin(u, '5555')); assert.ok(!C.checkPin(u, '5556'));
 });
+
+// ---- defects found in the review ----
+const mk2 = () => { const db = C.newDB(); const boss = C.makeUser('B', '1234', 'manager'), cash = C.makeUser('C', '0000', 'cashier'); db.users.push(boss, cash);
+  db.items.push({ id: 'a', barcode: '111', name: 'A', cost: 6, price: 10, stock: 100, batches: [], serials: [] });
+  const sh = C.openShift(db, cash, 100);
+  const sale = (q, pay, extra) => C.finalizeSale(db, Object.assign({ cart: { lines: [{ itemId: 'a', qty: q, price: 10, group: '' }] }, payments: pay, user: cash, shiftId: sh.id }, extra || {}));
+  return { db, boss, cash, sh, sale }; };
+const throws = (f, code) => { try { f(); } catch (e) { assert.strictEqual(e.message, code); return; } assert.fail('expected ' + code); };
+t('qty 0, negative or NaN is rejected (used to add stock / poison it with NaN)', () => {
+  const { db, sale } = mk2();
+  throws(() => sale(0, [{ method: 'cash', amount: 0 }]), 'BAD_QTY'); throws(() => sale(-2, [{ method: 'cash', amount: 0 }]), 'BAD_QTY'); throws(() => sale(NaN, [{ method: 'cash', amount: 0 }]), 'BAD_QTY');
+  assert.strictEqual(db.items[0].stock, 100); assert.strictEqual(db.sales.length, 0);
+});
+t('negative / NaN payment amounts are rejected', () => {
+  const { sale } = mk2(); throws(() => sale(1, [{ method: 'cash', amount: 20 }, { method: 'card', amount: -10 }]), 'BAD_PAYMENT');
+  throws(() => sale(1, [{ method: 'cash', amount: NaN }]), 'BAD_PAYMENT');
+});
+t('no sale or cash move on a closed shift', () => {
+  const { db, cash, sh, sale } = mk2(); sale(1, [{ method: 'cash', amount: 10 }]); C.closeShift(db, sh, 110, '');
+  throws(() => sale(1, [{ method: 'cash', amount: 10 }]), 'SHIFT_CLOSED'); throws(() => C.cashMove(db, sh, 'out', 5, 'x'), 'SHIFT_CLOSED');
+});
+t('return qty NaN is rejected', () => {
+  const { db, cash, sale } = mk2(); const s = sale(2, [{ method: 'cash', amount: 20 }]);
+  throws(() => C.finalizeReturn(db, s.id, [{ idx: 0, qty: NaN }], cash, { method: 'cash' }), 'QTY_EXCEEDS');
+});
+t('voiding a sale paid with an exchange receipt gives the credit back; leftover receipt is cancelled', () => {
+  const { db, boss, cash, sh, sale } = mk2(); const s1 = sale(1, [{ method: 'cash', amount: 10 }]);
+  C.finalizeReturn(db, s1.id, [{ idx: 0, qty: 1 }], cash, { method: 'credit', shiftId: sh.id }); const no = db.exchangeReceipts[0].no;
+  const s2 = sale(0.5, [], { exchangeReceiptNo: no }); assert.strictEqual(db.exchangeReceipts[0].status, 'redeemed'); assert.ok(s2.newExchangeReceipt);
+  C.voidSale(db, s2.id, boss, 'oops');
+  assert.strictEqual(db.exchangeReceipts[0].status, 'open'); assert.strictEqual(C.findExchangeReceipt(db, s2.newExchangeReceipt).status, 'cancelled');
+  sale(1, [], { exchangeReceiptNo: no }); // usable again
+});
+t('return window 0 = no limit for cashiers too (was: every return needed a manager)', () => {
+  const { db, cash, sale } = mk2(); db.settings.returnDays = 0; const s = sale(1, [{ method: 'cash', amount: 10 }]);
+  s.ts = new Date(Date.now() - 400 * 86400000).toISOString(); assert.ok(C.canReturn(db, s, cash).ok);
+  db.settings.returnDays = 7; assert.strictEqual(C.canReturn(db, s, cash).code, 'WINDOW');
+});

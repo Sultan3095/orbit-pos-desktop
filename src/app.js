@@ -23,7 +23,7 @@ function save(now) {
   if (now) { clearTimeout(saveTimer); return run(); }
   clearTimeout(saveTimer); saveTimer = setTimeout(run, 400); return Promise.resolve();
 }
-window.addEventListener('beforeunload', () => { if (App.db) window.api.save(JSON.stringify(App.db)); });
+window.addEventListener('beforeunload', () => { if (App.db) { try { window.api.saveSync(JSON.stringify(App.db)); } catch (e) { window.api.save(JSON.stringify(App.db)); } } }); // sync: an async save can be lost when the window is closing
 
 function toast(msg, kind) {
   const el = document.createElement('div'); el.className = 'toast ' + (kind || ''); el.textContent = msg;
@@ -96,7 +96,11 @@ function applyTheme() {
 
 // ---------- boot ----------
 async function boot() {
-  const raw = await window.api.load();
+  let raw;
+  try { raw = await window.api.load(); } catch (e) {
+    document.body.innerHTML = '<div style="padding:40px;font:16px sans-serif;direction:rtl;text-align:center"><h2>تعذر قراءة ملف البيانات</h2><p>Data file could not be read. Nothing was changed. Restore from a backup (Settings > Backup) or contact support.</p></div>';
+    return;
+  }
   App.db = raw ? JSON.parse(raw) : Core.newDB();
   const def = Core.defaultSettings(); for (const k in def) if (App.db.settings[k] === undefined) App.db.settings[k] = def[k];
   ['held', 'audit', 'customers', 'suppliers', 'promos', 'purchases', 'shifts', 'sales', 'items', 'users'].forEach((k) => { if (!App.db[k]) App.db[k] = []; });
