@@ -440,6 +440,11 @@
     if (kind !== 'in' && kind !== 'out') throw new Error('BAD_KIND');
     shift.moves.push({ ts: new Date().toISOString(), kind, amount: r2(amount), reason: reason || '', approvedBy: approvedBy || '' });
   };
+  // cashier cash-out above the limit needs a manager; a saved 0 means every cash-out needs one (200 only when unset)
+  Core.cashOutNeedsApproval = function (settings, amount, isManager) {
+    const lim = settings && settings.cashOutLimit != null ? settings.cashOutLimit : 200;
+    return !isManager && amount > lim;
+  };
   Core.shiftSummary = function (db, shift) {
     const rows = db.sales.filter((x) => x.shiftId === shift.id && x.status !== 'voided');
     const sales = rows.filter((x) => x.type === 'sale');

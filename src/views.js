@@ -258,7 +258,7 @@ function cashMoveModal(kind) {
   const fields = [{ k: 'amount', label: t('amount'), type: 'number', step: 'any', first: true }, { k: 'reason', label: t('reason') }];
   modal({ title: t(kind === 'in' ? 'cashIn' : 'cashOut'), body: '<div class="grid2">' + form(fields) + '</div>', buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: async (w) => {
     const v = readForm(w, fields); if (!(v.amount > 0)) { toast(t('invalidValue'), 'err'); return false; } if (!v.reason) { toast(t('reasonRequired'), 'err'); return false; }
-    let appr = ''; if (kind === 'out' && !isMgr() && v.amount > (App.db.settings.cashOutLimit || 200)) { const mgr = await managerApproval(t('cashOutApproval')); if (!mgr) return false; appr = mgr.name; }
+    let appr = ''; if (kind === 'out' && Core.cashOutNeedsApproval(App.db.settings, v.amount, isMgr())) { const mgr = await managerApproval(t('cashOutApproval')); if (!mgr) return false; appr = mgr.name; }
     Core.cashMove(App.db, App.shift, kind, v.amount, v.reason, appr); await save(true); Views.shift($('#main')); } }], enter: 1 });
 }
 function closeShiftModal() {

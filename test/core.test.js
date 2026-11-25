@@ -127,6 +127,14 @@ t('shift: expected cash = open + cash sales - change - cash refunds + in - out; 
   const sum = C.shiftSummary(db, sh); assert.strictEqual(sum.expectedCash, 100 + 30 - 10 + 5 - 20); assert.strictEqual(sum.byMethod.card, 10);
   C.closeShift(db, sh, 105, 'ok'); assert.strictEqual(sh.diff, 0); });
 
+t('cash-out approval: limit 0 always needs a manager, unset falls back to 200, managers never need one', () => {
+  assert.strictEqual(C.cashOutNeedsApproval({ cashOutLimit: 0 }, 1, false), true);
+  assert.strictEqual(C.cashOutNeedsApproval({}, 50, false), false);
+  assert.strictEqual(C.cashOutNeedsApproval({}, 250, false), true);
+  assert.strictEqual(C.cashOutNeedsApproval({ cashOutLimit: 100 }, 100, false), false);
+  assert.strictEqual(C.cashOutNeedsApproval({ cashOutLimit: 100 }, 101, false), true);
+  assert.strictEqual(C.cashOutNeedsApproval({ cashOutLimit: 0 }, 500, true), false); });
+
 // ---- reports ----
 t('slow-moving: 100-day old unsold flagged; recent sale & brand-new not flagged; sorted by value', () => {
   const db = mk(); const now = new Date('2026-06-01T10:00:00Z');
