@@ -179,6 +179,17 @@ app.whenReady().then(async () => {
     check('manager: reports have no profit or stock-at-cost', await ev(`Views.reports($('#main')); await new Promise(r=>setTimeout(r,300)); const tx=document.getElementById('main').textContent; return !tx.includes(t('todayProfit')) && !tx.includes(t('stockAtCost')) && !document.querySelector('[data-tab="stockval"]')`));
     check('manager: no Settings nav, cashier: only selling screens', await ev(`const n=()=>[...document.querySelectorAll('[data-nav]')].map(x=>x.dataset.nav); let a=n(); App.user=App.db.users.find(u=>u.name==='Omar'); shell(); let b=n(); return !a.includes('settings') && a.includes('reports') && !b.includes('items') && !b.includes('reports') && !b.includes('settings') && b.includes('sell')`));
     check('cashier shift close is blind (no expected amount)', await ev(`App.shift=App.db.shifts.find(s=>!s.closedAt); closeShiftModal(); await new Promise(r=>setTimeout(r,200)); const ok=!document.querySelector('.modal-wrap').textContent.includes(t('expectedCash')); document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return ok`));
+    // blind close with manager approval
+    await ev(`App.user=App.db.users.find(u=>u.name==='Omar'); const osh=Core.openShift(App.db,App.user,50); const it=App.db.items.find(i=>i.barcode==='6222'); Core.finalizeSale(App.db,{cart:{lines:[{itemId:it.id,qty:1,price:it.price,group:it.group||''}]},payments:[{method:'cash',amount:it.price}],user:App.user,shiftId:osh.id}); shell(); App.shift=osh; Views.shift($('#main')); return 1`); await sleep(400);
+    await click('#sh-close'); await sleep(300); await setv('[name=counted]', 55); await shot('45-cashier-blind-close-ar'); await modalBtn(1); await sleep(500);
+    check('blind close is saved as pending, shift locked, no expected/difference stored in view', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='pending' && !!s.closedAt && s.expectedCash===undefined`));
+    await shot('46-cashier-after-blind-close-ar');
+    await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    await click('[data-ap]'); await sleep(400); await shot('47-manager-approves-close-ar');
+    check('approver sees expected vs counted vs difference', await ev(`const tx=document.querySelector('.modal-wrap').textContent; return tx.includes('58') && tx.includes('55')`));
+    await setv('[name=note]', 'عدّ تاني ونقص 3'); await modalBtn(1); await sleep(600);
+    check('after approval the close is final with expected and difference', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='approved' && s.expectedCash===58 && s.diff===-3 && s.approvedBy==='Mona'`));
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
     await ev(`App.user=App._sys; shell(); Views.settings($('#main')); return 1`); await sleep(500);
     await ev(`document.getElementById('perm-card').scrollIntoView(); return 1`); await shot('41-permission-matrix-ar');
     check('system manager sees the permission matrix; locked rows disabled', await ev(`return !!document.querySelector('select[data-pm="cashier.sell"]') && document.querySelector('select[data-pm="system.settings"]').disabled`));
@@ -194,6 +205,23 @@ app.whenReady().then(async () => {
     const ed = await ev(`const s=App.db.sales.find(x=>x.id===App._editId); return {rev:s.rev, q:s.lines[0].qty, log:App.db.edits.length, html:receiptHTML(s,'ar').includes(t('rcRevised'))}`);
     check('invoice edited as a revision; audit row; revised copy marked on the receipt', ed.rev === 1 && ed.q === 3 && ed.log === 1 && ed.html, JSON.stringify(ed));
     await ev(`Views.settings($('#main')); return 1`); await sleep(400); await ev(`[...document.querySelectorAll('#main .card h3')].find(h=>h.textContent.includes(t('editLog'))).scrollIntoView(); return 1`); await shot('43-edit-log-ar');
+    // 10c. hardware: raster receipt to a fake network printer (ESC/POS decoder), drawer kick, test page, card reference
+    const fakeJobs = []; const fake = require('net').createServer((sk) => { const c = []; sk.on('data', (d) => c.push(d)); sk.on('end', () => fakeJobs.push(Buffer.concat(c))); });
+    await new Promise((r) => fake.listen(0, '127.0.0.1', r)); const fport = fake.address().port; const ESC = require('../escpos.js');
+    await ev(`Views.settings($('#main')); return 1`); await sleep(400);
+    await ev(`document.querySelector('[name=pr_type]').value='network'; document.querySelector('[name=pr_host]').value='127.0.0.1'; document.querySelector('[name=pr_port]').value='${fport}'; document.querySelector('[name=pr_drawerOnCash]').checked=true; document.getElementById('printer-card').scrollIntoView(); return 1`);
+    await click('#pr-save'); await sleep(300); await click('#pr-test'); await sleep(2500); await shot('44-printer-settings-ar');
+    const tj = fakeJobs[fakeJobs.length - 1]; const tev = tj ? ESC.decode(tj) : [];
+    check('test page reaches the fake printer as init + raster + feed + cut + drawer', tev.map((x) => x.t).join(',').startsWith('init,raster') && tev.some((x) => x.t === 'cut') && tev.some((x) => x.t === 'drawer'), tev.map((x) => x.t).join(','));
+    const rr = tev.filter((x) => x.t === 'raster'); check('raster is 80 mm wide (72 bytes = 576 dots) and has black pixels', rr.length > 0 && rr[0].wb === 72 && tj.some((b, ix) => ix > 100 && b !== 0 && b !== 0x1b), JSON.stringify(rr[0]));
+    await click('#pr-drawer'); await sleep(800); check('"Open drawer" sends ESC p to the printer', ESC.decode(fakeJobs[fakeJobs.length - 1] || Buffer.alloc(0)).some((x) => x.t === 'drawer'));
+    const nb = fakeJobs.length;
+    await ev(`const it=App.db.items.find(i=>i.barcode==='6222'); App._cardSale=Core.finalizeSale(App.db,{cart:{lines:[{itemId:it.id,qty:1,price:it.price,group:it.group||''}]},payments:[{method:'card',amount:it.price,ref:'A12345'}],user:App._sys,shiftId:curShift().id}).id; return 1`);
+    check('card reference code printed on the receipt', await ev(`return receiptHTML(App.db.sales.find(s=>s.id===App._cardSale),'ar').includes('#A12345')`));
+    await ev(`printReceipt(App.db.sales.find(s=>s.id===App._cardSale),'ar'); return 1`); await sleep(2500);
+    check('receipt printed through the raster path (arabic as image) without cut error', fakeJobs.length === nb + 1 && ESC.decode(fakeJobs[nb]).some((x) => x.t === 'raster'));
+    await ev(`App.db.settings.printer.type='system'; return 1`);
+    fake.close();
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
     const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);

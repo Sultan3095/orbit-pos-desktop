@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('api', {
   openSheet: () => ipcRenderer.invoke('xlsx:open'), saveSheet: (n, r, w) => ipcRenderer.invoke('xlsx:save', n, r, w),
   scrypt: (pin, salt) => ipcRenderer.sendSync('pin:scrypt', pin, salt),
   print: (html, o) => ipcRenderer.invoke('print:html', html, o),
+  printRaw: (html, profile, o) => ipcRenderer.invoke('print:raw', html, profile, o),
+  openDrawer: (profile) => ipcRenderer.invoke('printer:drawer', profile),
   openDisplay: () => ipcRenderer.invoke('display:open'), updateDisplay: (p) => ipcRenderer.send('display:update', p),
   onDisplay: (cb) => ipcRenderer.on('display:data', (_e, d) => cb(d)),
 });

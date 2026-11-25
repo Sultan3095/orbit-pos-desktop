@@ -97,6 +97,26 @@ ipcMain.handle('print:html', async (_e, html, opts) => {
     w.webContents.print({ silent: !!opts.silent, printBackground: true, margins: { marginType: 'none' } }, (ok, reason) => { w.close(); resolve({ ok, reason }); });
   });
 });
+// ---- ESC/POS raster printing: the receipt page is rendered to a bitmap and sent as GS v 0 ----
+const ESCPOS = require('./escpos.js');
+async function renderMono(html, widthMm) {
+  const dots = ESCPOS.dotsFor(widthMm); const bodyMm = Number(widthMm) === 58 ? 54 : 76; const z = dots / (bodyMm * 3.7795);
+  const w = new BrowserWindow({ show: false, width: dots, height: 800, useContentSize: true, webPreferences: { sandbox: true, offscreen: false } });
+  try {
+    await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html)); w.webContents.setZoomFactor(z); await new Promise((r) => setTimeout(r, 250));
+    const h = Math.ceil((await w.webContents.executeJavaScript('document.documentElement.scrollHeight')) * z) + 4;
+    w.setContentSize(dots, Math.min(h, 16000)); await new Promise((r) => setTimeout(r, 250));
+    const img = await w.webContents.capturePage({ x: 0, y: 0, width: dots, height: Math.min(h, 16000) }); const sz = img.getSize();
+    return ESCPOS.toMono(img.toBitmap(), sz.width, sz.height);
+  } finally { w.close(); }
+}
+ipcMain.handle('print:raw', async (_e, html, profile, o) => {
+  try { const mono = await renderMono(html, profile.width); await ESCPOS.send(profile, ESCPOS.receiptJob(mono, { drawer: !!(o && o.drawer), drawerPin: profile.drawerPin, cut: profile.cut !== false })); return { ok: true }; }
+  catch (e) { return { ok: false, reason: e.message }; }
+});
+ipcMain.handle('printer:drawer', async (_e, profile) => {
+  try { await ESCPOS.send(profile, Buffer.concat([ESCPOS.init(), ESCPOS.drawerKick(profile.drawerPin)])); return { ok: true }; } catch (e) { return { ok: false, reason: e.message }; }
+});
 ipcMain.handle('display:open', () => {
   if (display && !display.isDestroyed()) { display.focus(); return true; }
   display = new BrowserWindow({ width: 900, height: 600, title: 'Orbit POS', webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true } });

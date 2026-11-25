@@ -56,7 +56,8 @@
       costMethod: 'average', // 'average' | 'last'
       receiptWidth: 80, autoPrint: false,
       loyaltyEnabled: false, loyaltyEarnPerCurrency: 10, loyaltyPointValue: 0.5,
-      slowDays: 30, lowStockDefault: 5, expiryWarnDays: 30,
+      slowDays: 30, lowStockDefault: 5, printer: { type: 'system', host: '', port: 9100, path: '', width: 80, drawerOnCash: false, drawerPin: 0, cut: true },
+      expiryWarnDays: 30,
       scaleMode: 'manual', scalePrefix: '2', // weight barcode prefix
       backupDir: '', allowNegativeStock: false,
     };
@@ -683,11 +684,31 @@
     return { salesCount: sales.length, returnsCount: rets.length, salesTotal: r2(sales.reduce((t, s) => t + s.total, 0)),
       returnsTotal: r2(rets.reduce((t, r) => t + r.refund, 0)), byMethod, refunds, cashIn, cashOut, expectedCash };
   };
-  Core.closeShift = function (db, shift, countedCash, note) {
+  /** opts.blind: the closer may not see the expected cash. The count is saved, the shift is locked (no more sales), and the close waits for an approver. */
+  Core.closeShift = function (db, shift, countedCash, note, opts) {
     const sum = Core.shiftSummary(db, shift);
+    if (!Number.isFinite(countedCash) || countedCash < 0) throw new Error('BAD_PAYMENT');
+    if (opts && opts.blind) {
+      shift.closedAt = new Date().toISOString(); shift.countedCash = r2(countedCash); shift.note = note || ''; shift.approval = 'pending';
+      shift._sealed = { expectedCash: sum.expectedCash, diff: r2(countedCash - sum.expectedCash), summary: sum };
+      return shift;
+    }
+    shift.approval = 'auto';
     const diff = r2(countedCash - sum.expectedCash);
     shift.closedAt = new Date().toISOString(); shift.countedCash = r2(countedCash); shift.expectedCash = sum.expectedCash;
     shift.diff = diff; shift.note = note || ''; shift.summary = sum;
+    return shift;
+  };
+
+  /** What an approver is shown before approving a blind close. */
+  Core.pendingCloseView = function (db, shift) { if (shift.approval !== 'pending') throw new Error('NOT_PENDING'); return { expectedCash: shift._sealed.expectedCash, countedCash: shift.countedCash, diff: shift._sealed.diff, closedBy: shift.userName, closedAt: shift.closedAt }; };
+  Core.approveClose = function (db, shift, approver, note) {
+    if (shift.approval !== 'pending') throw new Error('NOT_PENDING');
+    if (!Core.isApprover(db, approver) || !Core.can(db, approver, 'seeExpected')) throw new Error('MANAGER_ONLY');
+    if (approver.id === shift.userId) throw new Error('SELF_APPROVE');
+    const sealed = shift._sealed; if (Math.abs(sealed.diff) > 0.009 && !String(note || '').trim() && !shift.note) throw new Error('DIFF_NOTE');
+    shift.expectedCash = sealed.expectedCash; shift.diff = sealed.diff; shift.summary = sealed.summary; delete shift._sealed;
+    shift.approval = 'approved'; shift.approvedBy = approver.name; shift.approvedAt = new Date().toISOString(); shift.approvalNote = String(note || '').trim();
     return shift;
   };
 

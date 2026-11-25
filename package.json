@@ -6,7 +6,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/core.test.js && node test/i18n.test.js && node test/store.test.js",
+    "test": "node test/core.test.js && node test/i18n.test.js && node test/store.test.js && node test/escpos.test.js",
     "pack:win": "electron-packager . \"Orbit POS\" --platform=win32 --arch=x64 --out=dist --overwrite --prune=true --ignore=\"^/(dist|test|shots|\\.github)\"",
     "dist": "electron-builder"
   },
@@ -17,6 +17,7 @@
       "main.js",
       "preload.js",
       "store-main.js",
+      "escpos.js",
       "src/**/*",
       "package.json"
     ],

@@ -248,10 +248,11 @@ Views.shift = function (m) {
       '<div class="row"><button class="btn" id="sh-in">＋ ' + t('cashIn') + '</button><button class="btn" id="sh-out">－ ' + t('cashOut') + '</button><button class="btn primary" id="sh-close">' + t('closeShift') + '</button></div></div>' +
       '<div class="card"><h3>' + t('cashMoves') + '</h3>' + table([t('time'), t('type'), t('amount'), t('reason')], sh.moves.map((x) => '<tr><td>' + fmtDT(x.ts) + '</td><td>' + t(x.kind === 'in' ? 'cashIn' : 'cashOut') + '</td><td>' + money(x.amount) + '</td><td>' + esc(x.reason) + (x.approvedBy ? ' <small>(' + esc(x.approvedBy) + ')</small>' : '') + '</td></tr>')) + '</div>';
   }
-  const hist = App.db.shifts.filter((s) => s.closedAt && (isMgr() || s.userId === App.user.id)).slice().reverse().slice(0, 30);
-  m.innerHTML = head(t('nav_shift')) + body + '<div class="card"><h3>' + t('closedShifts') + '</h3>' + table([t('cashier'), t('openedAt'), t('closedAt'), t('expectedCash'), t('countedCash'), t('difference'), ''], hist.map((s) => '<tr><td>' + esc(s.userName) + '</td><td>' + fmtDT(s.openedAt) + '</td><td>' + fmtDT(s.closedAt) + '</td><td>' + money(s.expectedCash) + '</td><td>' + money(s.countedCash) + '</td><td class="' + (Math.abs(s.diff) > 0.009 ? 'bad' : 'good') + '">' + money(s.diff) + '</td><td><button class="btn sm" data-z="' + s.id + '">🖨 Z</button></td></tr>')) + '</div>';
+  const hist = App.db.shifts.filter((s) => s.closedAt && (can('viewOtherShifts') || s.userId === App.user.id)).slice().reverse().slice(0, 30);
+  m.innerHTML = head(t('nav_shift')) + body + '<div class="card"><h3>' + t('closedShifts') + '</h3>' + table([t('cashier'), t('openedAt'), t('closedAt'), t('expectedCash'), t('countedCash'), t('difference'), ''], hist.map((s) => '<tr><td>' + esc(s.userName) + '</td><td>' + fmtDT(s.openedAt) + '</td><td>' + fmtDT(s.closedAt) + '</td><td>' + (s.approval === 'pending' ? '—' : money(s.expectedCash)) + '</td><td>' + money(s.countedCash) + '</td>' + (s.approval === 'pending' ? '<td colspan="1"><span class="tag w">' + t('pendingApproval') + '</span></td>' : '<td class="' + (Math.abs(s.diff) > 0.009 ? 'bad' : 'good') + '">' + money(s.diff) + '</td>') + '<td>' + (s.approval === 'pending' ? (can('approve') && can('seeExpected') || can('viewOtherShifts') ? '<button class="btn sm primary" data-ap="' + s.id + '">' + t('approveClose') + '</button>' : '') : '<button class="btn sm" data-z="' + s.id + '">🖨 Z</button>') + '</td></tr>')) + '</div>';
   m.onclick = (e) => {
     if (e.target.id === 'sh-open') openShiftModal(); if (e.target.id === 'sh-in') cashMoveModal('in'); if (e.target.id === 'sh-out') cashMoveModal('out'); if (e.target.id === 'sh-close') closeShiftModal();
+    const ap = e.target.closest('[data-ap]'); if (ap) return approveCloseModal(App.db.shifts.find((x) => x.id === ap.dataset.ap));
     const z = e.target.closest('[data-z]'); if (z) printZ(App.db.shifts.find((x) => x.id === z.dataset.z));
   };
 };
@@ -268,8 +269,8 @@ function closeShiftModal() {
   const sum = Core.shiftSummary(App.db, App.shift); const fields = [{ k: 'counted', label: t('countedCash'), type: 'number', step: 'any', first: true }, { k: 'note', label: t('note') }];
   const m = modal({ title: t('closeShift'), body: '<div class="paytot">' + (can('seeExpected') ? t('expectedCash') + ': <b>' + money(sum.expectedCash) + '</b>' : t('blindCount')) + '</div><div class="grid2">' + form(fields) + '</div><div id="dif" class="paystat"></div>', buttons: [{ label: t('cancel') }, { label: t('closeShift'), cls: 'primary', onClick: async (w) => {
     const v = readForm(w, fields); if (v.counted == null || v.counted < 0) { toast(t('invalidValue'), 'err'); return false; } const diff = Core.r2(v.counted - sum.expectedCash);
-    if (Math.abs(diff) > 0.009 && !v.note) { toast(t('diffNeedsNote'), 'err'); return false; }
-    const sh = Core.closeShift(App.db, App.shift, v.counted, v.note); await save(true); App.shift = null; Views.shift($('#main')); printZ(sh); } }], enter: 1 });
+    if (can('seeExpected') && Math.abs(diff) > 0.009 && !v.note) { toast(t('diffNeedsNote'), 'err'); return false; }
+    const blind = !can('seeExpected'); const sh = Core.closeShift(App.db, App.shift, v.counted, v.note, { blind }); await save(true); App.shift = null; Views.shift($('#main')); if (blind) toast(t('closePending')); else printZ(sh); } }], enter: 1 });
   m.addEventListener('input', () => { const v = Core.num($('[name=counted]', m).value); const d = isNaN(v) || !can('seeExpected') ? null : Core.r2(v - sum.expectedCash); $('#dif', m).innerHTML = d == null ? '' : '<span class="' + (Math.abs(d) > 0.009 ? 'bad' : 'good') + '">' + t('difference') + ': ' + money(d) + '</span>'; });
 }
 function printZ(sh) {
@@ -322,7 +323,7 @@ Views.settings = function (m) {
   ];
   const vals = Object.assign({}, s, { receiptWidth: String(s.receiptWidth), accent: s.accent || '#2563eb' });
   m.innerHTML = head(t('nav_settings'), '<button class="btn primary" id="st-save">' + t('save') + '</button>') + F.map((g) => '<div class="card"><h3>' + t('sg_' + g[0]) + '</h3><div class="grid3">' + form(g[1], vals) + '</div></div>').join('') +
-    (can('settings') ? '<div class="card" id="perm-card"><h3>🔑 ' + t('permMatrix') + '</h3><p class="muted">Y = ' + sb('مسموح', 'allowed') + ' · A = ' + sb('بموافقة مدير', 'needs approval') + ' · N = ' + sb('ممنوع', 'denied') + '</p>' + permMatrixHTML() + '</div><div class="card"><h3>' + t('editLog') + '</h3>' + editLogHTML() + '</div>' : '') +
+    (can('settings') ? printerCardHTML() : '') + (can('settings') ? '<div class="card" id="perm-card"><h3>🔑 ' + t('permMatrix') + '</h3><p class="muted">Y = ' + sb('مسموح', 'allowed') + ' · A = ' + sb('بموافقة مدير', 'needs approval') + ' · N = ' + sb('ممنوع', 'denied') + '</p>' + permMatrixHTML() + '</div><div class="card"><h3>' + t('editLog') + '</h3>' + editLogHTML() + '</div>' : '') +
     '<div class="card"><h3>' + t('users') + '</h3><div id="ulist"></div><button class="btn" id="u-add">+ ' + t('addUser') + '</button></div>' +
     '<div class="card" id="sec-card"><h3>🔐 ' + sb('حماية البيانات', 'Data protection') + '</h3><p class="muted" id="sec-state"></p><div class="row"><button class="btn" id="sec-mode"></button><button class="btn" id="sec-change">' + sb('تغيير كلمة السر', 'Change passphrase') + '</button></div></div>' +
     '<div class="card"><h3>' + t('backup') + '</h3><p class="muted">' + t('backupInfo') + '</p><div class="row"><button class="btn" id="b-now">💾 ' + t('backupNow') + '</button><button class="btn" id="b-res">♻ ' + t('restore') + '</button><button class="btn" id="b-dir">📁 ' + t('chooseFolder') + '</button><span class="muted">' + esc(s.backupDir || t('defaultFolder')) + '</span></div><div class="muted sm" id="dpath"></div></div>';
@@ -338,6 +339,14 @@ Views.settings = function (m) {
       s.accent = v.accent === '#2563eb' && !s.accent ? '' : v.accent; s.receiptWidth = Number(v.receiptWidth); ['autoPrint', 'pricesIncludeTax', 'allowNegativeStock', 'managerBypassReturnWindow', 'loyaltyEnabled'].forEach((k) => { s[k] = !!v[k]; });
       for (const k of ['taxRate', 'maxCashierDiscountPct', 'lowStockDefault', 'returnDays', 'cashOutLimit', 'loyaltyEarnPerCurrency', 'loyaltyPointValue', 'slowDays', 'expiryWarnDays']) { if (v[k] != null && v[k] >= 0) s[k] = v[k]; }
       await save(true); applyTheme(); toast(t('saved')); shell();
+    }
+    if (e.target.id === 'pr-save' || e.target.id === 'pr-test' || e.target.id === 'pr-drawer') {
+      const g = (k) => $('[name=pr_' + k + ']', m); const p = App.db.settings.printer = { type: g('type').value, host: g('host').value.trim(), port: Number(g('port').value) || 9100, path: g('path').value.trim(), width: Number(g('width').value) || 80, drawerOnCash: g('drawerOnCash').checked, drawerPin: Number(g('drawerPin').value) || 0, cut: g('cut').checked };
+      await save(true); const out = $('#pr-out', m);
+      if (e.target.id === 'pr-save') { toast(t('saved')); return; }
+      if (p.type === 'system') { out.textContent = sb('اختار نوع طابعة غير "طابعة ويندوز" عشان تجرب الأمر ده.', 'Pick a printer type other than "Windows printer" to test this.'); return; }
+      out.textContent = '…'; const r = e.target.id === 'pr-test' ? await window.api.printRaw(testPageHTML(), p, { drawer: p.drawerOnCash }) : await window.api.openDrawer(p);
+      out.innerHTML = r.ok ? '<span class="good">' + sb('اتبعت للطابعة. اتأكد إن الورقة خرجت (أو الدرج اتفتح).', 'Sent to the printer. Check that paper came out (or the drawer opened).') + '</span>' : '<span class="bad">' + esc(r.reason || '') + '</span>';
     }
     if (e.target.id === 'u-add') userModal(null, () => drawUsers()); const ue = e.target.closest('[data-ue]'); if (ue) userModal(App.db.users.find((x) => x.id === ue.dataset.ue), () => drawUsers());
     if (e.target.id === 'b-now') { await save(true); const p = await window.api.backupNow(); toast(p ? t('backupSaved') + ': ' + p : t('saveFail'), p ? '' : 'err'); }
@@ -402,4 +411,29 @@ function editLogHTML() {
   const rows = (App.db.edits || []).slice().reverse().slice(0, 100);
   if (!rows.length) return '<p class="muted">—</p>';
   return table([t('date'), t('no'), t('cashier'), t('editReason'), t('total'), t('cashDiffIs')], rows.map((x) => '<tr><td>' + fmtDT(x.ts) + '</td><td>' + esc(x.saleNo) + ' <small>v' + x.rev + '</small></td><td>' + esc(x.user) + (x.approvedBy ? ' <small>(' + esc(x.approvedBy) + ')</small>' : '') + '</td><td>' + esc(x.reason) + '</td><td>' + money(x.before.total) + ' → ' + money(x.after.total) + '</td><td>' + money(x.cashDiff) + (x.shiftClosed ? ' <small>' + sb('شيفت مقفول', 'closed shift') + '</small>' : '') + '</td></tr>'));
+}
+
+function testPageHTML() {
+  const s = App.db.settings; const w = Number(s.printer.width) === 58 ? '54mm' : '76mm';
+  return '<!doctype html><html dir="rtl"><head><meta charset="utf-8"><style>body{width:' + w + ';margin:0 auto;padding:3mm;font:12px/1.4 "Segoe UI",Tahoma,Arial,sans-serif;color:#000;box-sizing:border-box}h2,p{text-align:center;margin:2px 0}hr{border:0;border-top:1px dashed #000}</style></head><body><h2>Orbit POS</h2><p>اختبار الطابعة · Printer test</p><hr><p>مرحبا 0123456789 ٠١٢٣٤٥٦٧٨٩</p><p>ABCDEFGHIJ abcdefghij</p><p>' + esc(s.storeName) + '</p><hr><p>' + new Date().toLocaleString('en-GB') + '</p></body></html>';
+}
+function printerCardHTML() {
+  const p = App.db.settings.printer || {}; const opt = (v, l) => '<option value="' + v + '"' + (p.type === v ? ' selected' : '') + '>' + l + '</option>';
+  return '<div class="card" id="printer-card"><h3>🖨 ' + sb('الطابعة ودرج الكاش', 'Printer and cash drawer') + '</h3><p class="muted">' + sb('الإيصال بيتطبع كصورة فالعربي يطلع صح على أي طابعة ESC/POS. جرّب بزر الاختبار قبل التشغيل الفعلي.', 'Receipts are printed as an image, so Arabic works on any ESC/POS printer. Use the test buttons before going live.') + '</p><div class="grid3">' +
+    '<div><label>' + sb('نوع الطابعة', 'Printer type') + '</label><select name="pr_type">' + opt('system', sb('طابعة ويندوز (عادية)', 'Windows printer (normal)')) + opt('network', sb('شبكة (IP، بورت 9100)', 'Network (IP, port 9100)')) + opt('share', sb('طابعة مشتركة على ويندوز', 'Windows shared printer')) + opt('serial', sb('منفذ سيريال COM', 'Serial COM port')) + '</select></div>' +
+    '<div><label>IP</label><input name="pr_host" value="' + esc(p.host || '') + '" placeholder="192.168.1.50"></div><div><label>Port</label><input name="pr_port" type="number" value="' + (p.port || 9100) + '"></div>' +
+    '<div><label>' + sb('المسار (مشتركة/COM)', 'Path (shared/COM)') + '</label><input name="pr_path" value="' + esc(p.path || '') + '" placeholder="\\\\localhost\\POS80 / COM3"></div>' +
+    '<div><label>' + sb('عرض الورق', 'Paper width') + '</label><select name="pr_width"><option value="80"' + (Number(p.width) === 80 ? ' selected' : '') + '>80 mm</option><option value="58"' + (Number(p.width) === 58 ? ' selected' : '') + '>58 mm</option></select></div>' +
+    '<div><label>' + sb('طرف الدرج', 'Drawer pin') + '</label><select name="pr_drawerPin"><option value="0"' + (!p.drawerPin ? ' selected' : '') + '>2 (' + sb('الأشهر', 'common') + ')</option><option value="1"' + (p.drawerPin ? ' selected' : '') + '>5</option></select></div></div>' +
+    '<label class="chk"><input type="checkbox" name="pr_drawerOnCash"' + (p.drawerOnCash ? ' checked' : '') + '> ' + sb('افتح الدرج تلقائيا مع البيع النقدي', 'Open the drawer automatically on cash sales') + '</label> <label class="chk"><input type="checkbox" name="pr_cut"' + (p.cut !== false ? ' checked' : '') + '> ' + sb('قص الورق بعد الإيصال', 'Cut paper after the receipt') + '</label>' +
+    '<div class="row"><button class="btn primary" id="pr-save">' + t('save') + '</button><button class="btn" id="pr-test">🖨 ' + sb('اطبع صفحة اختبار', 'Print test page') + '</button><button class="btn" id="pr-drawer">🗄 ' + sb('افتح الدرج', 'Open drawer') + '</button></div><p id="pr-out" class="muted"></p></div>';
+}
+
+async function approveCloseModal(sh) {
+  let ap = App.user;
+  if (!(Core.isApprover(App.db, ap) && Core.can(App.db, ap, 'seeExpected'))) { ap = await managerApproval(t('approveCloseQ', { n: sh.userName })); if (!ap || !Core.can(App.db, ap, 'seeExpected')) return; }
+  let view; try { view = Core.pendingCloseView(App.db, sh); } catch (e) { return toast(errMsg(e), 'err'); }
+  const m = modal({ title: t('approveClose') + ' · ' + sh.userName, body: '<div class="stats">' + stat(t('expectedCash'), money(view.expectedCash)) + stat(t('countedCash'), money(view.countedCash)) + stat(t('difference'), '<span class="' + (Math.abs(view.diff) > 0.009 ? 'bad' : 'good') + '">' + money(view.diff) + '</span>') + '</div>' + (sh.note ? '<p class="muted">' + esc(sh.note) + '</p>' : '') + '<div class="grid2">' + form([{ k: 'note', label: t('note') }]) + '</div>',
+    buttons: [{ label: t('cancel') }, { label: t('approve'), cls: 'primary', onClick: async (w) => {
+      try { Core.approveClose(App.db, sh, ap, readForm(w, [{ k: 'note' }]).note); await save(true); Views.shift($('#main')); printZ(sh); } catch (er) { toast(errMsg(er), 'err'); return false; } } }], enter: 0 });
 }

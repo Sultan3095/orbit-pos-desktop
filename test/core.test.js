@@ -315,3 +315,20 @@ t('two cashiers run overlapping shifts without touching each other', () => {
   assert.strictEqual(C.shiftSummary(db, sh).expectedCash, 110); assert.strictEqual(C.shiftSummary(db, sh2).expectedCash, 230);
   C.closeShift(db, sh, 110, ''); assert.ok(!sh2.closedAt); assert.strictEqual(C.shiftSummary(db, sh2).expectedCash, 230);
 });
+
+t('blind close: saved and locked, expected hidden until a manager approves; self-approval and cashier approval refused', () => {
+  const { db, boss, cash, sh, sale } = mk2(); C.upgradeRoles(db); sale(2, [{ method: 'cash', amount: 20 }]);
+  C.closeShift(db, sh, 115, '', { blind: true });
+  assert.strictEqual(sh.approval, 'pending'); assert.ok(sh.closedAt); assert.strictEqual(sh.expectedCash, undefined); assert.strictEqual(sh.diff, undefined);
+  throws(() => C.finalizeSale(db, { cart: { lines: [{ itemId: 'a', qty: 1, price: 10, group: '' }] }, payments: [{ method: 'cash', amount: 10 }], user: cash, shiftId: sh.id }), 'SHIFT_CLOSED');
+  assert.ok(C.openShift(db, cash, 50)); // the cashier can start a new shift right away
+  throws(() => C.approveClose(db, sh, cash, ''), 'MANAGER_ONLY');
+  const v = C.pendingCloseView(db, sh); assert.strictEqual(v.expectedCash, 120); assert.strictEqual(v.countedCash, 115); assert.strictEqual(v.diff, -5);
+  throws(() => C.approveClose(db, sh, boss, ''), 'DIFF_NOTE');
+  C.approveClose(db, sh, boss, 'counted again, 5 short'); assert.strictEqual(sh.approval, 'approved'); assert.strictEqual(sh.expectedCash, 120); assert.strictEqual(sh.diff, -5); assert.strictEqual(sh.approvedBy, 'B'); assert.strictEqual(sh._sealed, undefined);
+  throws(() => C.approveClose(db, sh, boss, ''), 'NOT_PENDING');
+});
+t('normal (non-blind) close closes at once; approver cannot approve his own blind close', () => {
+  const { db, boss, sh } = mk2(); C.upgradeRoles(db); const bs = C.openShift(db, boss, 10); C.closeShift(db, bs, 10, ''); assert.strictEqual(bs.approval, 'auto'); assert.strictEqual(bs.diff, 0);
+  const s2 = C.openShift(db, boss, 10); C.closeShift(db, s2, 10, '', { blind: true }); throws(() => C.approveClose(db, s2, boss, ''), 'SELF_APPROVE');
+});

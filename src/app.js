@@ -376,7 +376,7 @@ const Sell = {
     if (!App.cart.lines.length) return;
     if (!App.shift) return openShiftModal();
     const r = this.calc(); if (r.total < 0) return;
-    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }];
+    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'cref', label: t('cardRef') }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }];
     const quick = [r.total, 50, 100, 200, 500].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
     const cust = App.cart.customerId ? App.db.customers.find((x) => x.id === App.cart.customerId) : null;
     modal({ title: t('pay'), cls: 'wide', body: '<div class="paytot">' + t('total') + ': <b>' + money(r.total) + ' ' + esc(cur()) + '</b></div><div class="grid3">' + form(fields) + '</div>' +
@@ -395,13 +395,14 @@ const Sell = {
 async function doPay(w, fields) {
   const v = readForm(w, fields);
   const xrNo = (v.xr || '').trim();
-  const payments = [{ method: 'cash', amount: v.cash || 0 }, { method: 'card', amount: v.card || 0 }, { method: 'other', amount: v.other || 0 }].filter((p) => p.amount > 0);
+  const payments = [{ method: 'cash', amount: v.cash || 0 }, { method: 'card', amount: v.card || 0, ref: (v.cref || '').trim() }, { method: 'other', amount: v.other || 0 }].filter((p) => p.amount > 0);
   const c = App.cart; const r = Sell.calc(); const cust = c.customerId ? App.db.customers.find((x) => x.id === c.customerId) : null;
   try {
     const sale = Core.finalizeSale(App.db, { cart: { lines: c.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it.group, taxExempt: it.taxExempt }); }), invPct: c.invPct, invAmt: c.invAmt, redeemValue: r.redeemValue },
       payments, exchangeReceiptNo: xrNo || undefined, user: App.user, shiftId: App.shift.id, customerId: c.customerId, customerName: cust ? cust.name : '', profileName: App.shift.profileName });
     if (c.approvedBy) sale.approvedBy = c.approvedBy;
     await save(true);
+    if (App.db.settings.printer && App.db.settings.printer.drawerOnCash && App.db.settings.printer.type !== 'system' && sale.payments.some((p) => p.method === 'cash')) { try { window.api.openDrawer(App.db.settings.printer); } catch (e) {} }
     App.cart = newCart(); Sell.renderCart();
     try { window.api.updateDisplay({ thanks: true, lang: lang(), theme: App.db.settings.theme, total: sale.total, currency: cur(), change: sale.change }); } catch (e) {}
     showReceiptDone(sale);
@@ -466,7 +467,7 @@ function receiptHTML(doc, l) {
   const s = App.db.settings; l = l || s.receiptLang; const rtl = l === 'ar'; const w = s.receiptWidth === 58 ? '54mm' : '76mm';
   const m = (n) => money(n, l); const isRet = doc.type === 'return';
   const rows = (isRet ? doc.lines.map((x) => ({ name: (l === 'en' && x.nameEn) ? x.nameEn : x.name, qty: x.qty, total: -x.value })) : doc.lines.map((x) => ({ name: (l === 'en' && x.nameEn) ? x.nameEn : x.name, qty: x.qty, price: x.price, total: x.total, promo: x.promoNames })));
-  const pay = (doc.payments || []).map((p) => '<tr><td>' + tr('pm_' + p.method, l) + '</td><td class="e">' + m(p.amount) + '</td></tr>').join('');
+  const pay = (doc.payments || []).map((p) => '<tr><td>' + tr('pm_' + p.method, l) + (p.ref ? ' <span class="sm">#' + esc(p.ref) + '</span>' : '') + '</td><td class="e">' + m(p.amount) + '</td></tr>').join('');
   return '<!doctype html><html dir="' + (rtl ? 'rtl' : 'ltr') + '" lang="' + l + '"><head><meta charset="utf-8"><style>@page{size:' + w + ' auto;margin:0}*{box-sizing:border-box}body{width:' + w + ';margin:0 auto;padding:3mm;font:12px/1.35 "Segoe UI",Tahoma,Arial,sans-serif;color:#000}h2,h3,p{margin:0;text-align:center}table{width:100%;border-collapse:collapse}td{padding:1px 0;vertical-align:top}.e{text-align:' + (rtl ? 'left' : 'right') + '}hr{border:0;border-top:1px dashed #000;margin:4px 0}.big{font-size:15px;font-weight:700}.sm{font-size:10px}</style></head><body>' +
     '<h2>' + esc(s.storeName) + '</h2>' + (s.storeAddress ? '<p class="sm">' + esc(s.storeAddress) + '</p>' : '') + (s.storePhone ? '<p class="sm">' + esc(s.storePhone) + '</p>' : '') + (s.taxNumber ? '<p class="sm">' + tr('taxNo', l) + ': ' + esc(s.taxNumber) + '</p>' : '') +
     '<hr><h3>' + tr(isRet ? 'rcReturn' : 'rcInvoice', l) + '</h3>' + (doc.rev ? '<p><b>' + tr('rcRevised', l) + ' ' + doc.rev + '</b></p>' : '') + '<table><tr><td>' + tr('rcNo', l) + '</td><td class="e">' + esc(doc.no) + '</td></tr><tr><td>' + tr('rcDate', l) + '</td><td class="e">' + new Date(doc.ts).toLocaleString(rtl ? locFor('ar') : 'en-GB') + '</td></tr><tr><td>' + tr('rcCashier', l) + '</td><td class="e">' + esc(doc.userName) + '</td></tr>' +
@@ -479,7 +480,8 @@ function receiptHTML(doc, l) {
     '<hr><p>' + esc(s.receiptFooter || tr('rcThanks', l)) + '</p><p class="sm">' + esc(doc.no) + '</p></body></html>';
 }
 async function printReceipt(doc, l) {
-  const html = receiptHTML(doc, l);
+  const html = receiptHTML(doc, l); const pr = App.db.settings.printer;
+  if (pr && pr.type !== 'system') { try { const r = await window.api.printRaw(html, pr, { drawer: false }); if (!r.ok) toast(t('printFail') + ' ' + (r.reason || ''), 'err'); } catch (e) { toast(t('printFail'), 'err'); } return; }
   try { const r = await window.api.print(html, { silent: false }); if (r && !r.ok && r.reason !== 'cancelled' && r.reason !== 'Print job canceled') toast(t('printFail') + ' ' + (r.reason || ''), 'err'); } catch (e) { toast(t('printFail'), 'err'); }
 }
 
