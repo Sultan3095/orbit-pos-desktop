@@ -221,6 +221,10 @@ t('problem check: finds missing manager, stale shift, bad prices, duplicate barc
   ['backupNever:bad', 'shiftStale:warn', 'negStock:warn', 'belowCost:warn', 'dupBarcode:bad'].forEach((x) => assert.ok(r.includes(x), x + ' in ' + r));
   assert.ok(ids(C.healthCheck(db, { backupAgeDays: 5 })).includes('backupOld:warn'));
 });
+t('demo catalogue: unique barcodes, price above cost, all flagged demo', () => {
+  const it = C.sampleItems(); assert.strictEqual(it.length, 8);
+  assert.strictEqual(new Set(it.map((i) => i.barcode)).size, 8); assert.ok(it.every((i) => i.price > i.cost && i.demo && i.nameEn && i.name));
+});
 console.log(n + ' passed');
 
 // ---- PIN hashing (scrypt) ----

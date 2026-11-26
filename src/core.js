@@ -728,6 +728,14 @@
     const pr = db.settings.printer || {}; if (!pr.type || pr.type === 'system') add('warn', 'printerSystem'); else add('ok', 'printerSet');
     return out;
   };
+
+  /** Demo catalogue for a first look at the app (the owner can delete it). Barcodes are in the in-store range 2xxxxxxxxxxxx. */
+  Core.sampleItems = function () {
+    const rows = [['Water 600ml', 'مياه 600 مل', 'Drinks', 3, 5, 120], ['Cola 330ml', 'كولا 330 مل', 'Drinks', 7, 12, 80], ['Chips', 'شيبسي', 'Snacks', 5, 8, 100],
+      ['Chocolate bar', 'شوكولاتة', 'Snacks', 9, 15, 60], ['Biscuits', 'بسكويت', 'Snacks', 4, 7, 90], ['Milk 1L', 'لبن 1 لتر', 'Dairy', 28, 36, 40],
+      ['Cheese 250g', 'جبنة 250 جم', 'Dairy', 30, 42, 30], ['Notebook', 'كشكول', 'Stationery', 10, 18, 50]];
+    return rows.map((r, i) => ({ id: Core.uid('it'), barcode: '200000000' + String(i + 1).padStart(4, '0'), name: r[1], nameEn: r[0], group: r[2], unit: '', cost: r[3], price: r[4], stock: r[5], minStock: 10, batches: [], serials: [], active: true, demo: true }));
+  };
   Core.pendingCloseView = function (db, shift) { if (shift.approval !== 'pending') throw new Error('NOT_PENDING'); return { expectedCash: shift._sealed.expectedCash, countedCash: shift.countedCash, diff: shift._sealed.diff, closedBy: shift.userName, closedAt: shift.closedAt }; };
   Core.approveClose = function (db, shift, approver, note) {
     if (shift.approval !== 'pending') throw new Error('NOT_PENDING');

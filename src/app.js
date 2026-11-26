@@ -166,15 +166,16 @@ function setupWizard() {
     '<div class="grid2">' + form([
       { k: 'storeName', label: t('storeName'), first: true, wide: true }, { k: 'name', label: t('managerName'), def: lang() === 'ar' ? 'المدير' : 'Manager' },
       { k: 'pin', label: t('pin4'), type: 'password' }, { k: 'currency', label: t('currency'), def: 'EGP' }, { k: 'taxRate', label: t('taxRate'), type: 'number', def: 14 },
+      { k: 'demo', type: 'check', label: '', hint: t('wizDemo'), wide: true },
     ]) + '</div><button class="btn primary big" id="wiz-go">' + t('start') + '</button></div></div>';
   root.onclick = (e) => {
     const l = e.target.dataset && e.target.dataset.lang;
     if (l) { App.db.settings.lang = l; App.db.settings.receiptLang = l; applyTheme(); return setupWizard(); }
     if (e.target.id === 'wiz-go') {
-      const v = readForm(root, [{ k: 'storeName' }, { k: 'name' }, { k: 'pin' }, { k: 'currency' }, { k: 'taxRate', type: 'number' }]);
+      const v = readForm(root, [{ k: 'storeName' }, { k: 'name' }, { k: 'pin' }, { k: 'currency' }, { k: 'taxRate', type: 'number' }, { k: 'demo', type: 'check' }]);
       if (!v.storeName || !v.name || !/^\d{4,8}$/.test(v.pin)) return toast(t('wizInvalid'), 'err');
       App.db.settings.storeName = v.storeName; App.db.settings.currency = v.currency || 'EGP'; App.db.settings.taxRate = v.taxRate == null ? 14 : v.taxRate;
-      App.db.users.push(Core.makeUser(v.name, v.pin, 'system')); save(true); root.onclick = null; login();
+      App.db.users.push(Core.makeUser(v.name, v.pin, 'system')); if (v.demo && !App.db.items.length) Core.sampleItems().forEach((i) => App.db.items.push(i)); save(true); root.onclick = null; login();
     }
   };
 }
