@@ -197,8 +197,8 @@ function login() {
 }
 
 // ---------- shell ----------
-const NAV = [['sell', '🛒'], ['items', '📦'], ['purchases', '🧾'], ['promos', '🏷️'], ['people', '👥'], ['history', '📜'], ['shift', '⏱️'], ['reports', '📊'], ['settings', '⚙️']];
-const NAV_PERM = { items: 'editItems', purchases: 'importPurchases', promos: 'promos', reports: 'reports', settings: 'settings' };
+const NAV = [['sell', '🛒'], ['items', '📦'], ['purchases', '🧾'], ['promos', '🏷️'], ['coupons', '🎟️'], ['gifts', '🎁'], ['people', '👥'], ['history', '📜'], ['shift', '⏱️'], ['reports', '📊'], ['settings', '⚙️']];
+const NAV_PERM = { items: 'editItems', purchases: 'importPurchases', promos: 'promos', coupons: 'coupons', gifts: 'sellGiftCard', reports: 'reports', settings: 'settings' };
 function curShift() { return App.db.shifts.find((s) => s.userId === App.user.id && !s.closedAt) || null; }
 function shell() {
   App.shift = curShift();
@@ -223,7 +223,7 @@ function renderView() {
 }
 
 // ---------- Sell ----------
-function newCart() { return { lines: [], invPct: 0, invAmt: 0, customerId: null, redeem: false }; }
+function newCart() { return { lines: [], invPct: 0, invAmt: 0, customerId: null, redeem: false, couponCode: '' }; }
 function holdCart(silent) {
   if (!App.cart.lines.length) return;
   App.db.held.push({ id: Core.uid('h'), ts: new Date().toISOString(), userId: App.user.id, cart: App.cart });
@@ -242,7 +242,9 @@ const Sell = {
     const c = App.cart; const cust = c.customerId ? App.db.customers.find((x) => x.id === c.customerId) : null;
     const s = App.db.settings; let redeemValue = 0;
     if (c.redeem && cust && s.loyaltyEnabled) redeemValue = Core.r2((cust.points || 0) * s.loyaltyPointValue);
-    return Core.computeCart({ lines: c.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it ? it.group : '', taxExempt: it && it.taxExempt }); }), invPct: c.invPct, invAmt: c.invAmt, redeemValue }, App.db.promos, s);
+    let coupon = null;
+    if (c.couponCode) { try { coupon = Core.checkCoupon(App.db, c.couponCode, { customerId: c.customerId }); } catch (e) { coupon = null; } }
+    return Core.computeCart({ lines: c.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it ? it.group : '', taxExempt: it && it.taxExempt }); }), invPct: c.invPct, invAmt: c.invAmt, redeemValue, coupon }, App.db.promos, s);
   },
   render(m) {
     const sh = App.shift;
@@ -324,7 +326,7 @@ const Sell = {
       (r.invoiceDisc > 0 ? '<div><span>' + t('invDiscount') + (r.invoicePromoNames.length ? ' (' + esc(r.invoicePromoNames.join(', ')) + ')' : '') + '</span><span>−' + money(r.invoiceDisc) + '</span></div>' : '') +
       '<div class="muted sm"><span>' + t('incl_tax') + '</span><span>' + money(r.tax) + '</span></div>' +
       '<div class="grand"><span>' + t('total') + '</span><span>' + money(r.total) + ' <small>' + esc(cur()) + '</small></span></div></div>' +
-      '<div class="actions"><button class="btn" data-cart="disc">% ' + t('discount') + '</button><button class="btn" data-cart="cust">👤 ' + t('customer') + '</button><button class="btn" data-cart="hold">⏸ ' + t('hold') + ' (F8)</button><button class="btn danger" data-cart="clear">🗑</button></div>' +
+      '<div class="actions"><button class="btn" data-cart="disc">% ' + t('discount') + '</button><button class="btn" data-cart="cust">👤 ' + t('customer') + '</button><button class="btn" data-cart="coupon">🎟 ' + t('cpButton') + (App.cart.couponCode ? ' ✓' : '') + '</button><button class="btn" data-cart="hold">⏸ ' + t('hold') + ' (F8)</button><button class="btn danger" data-cart="clear">🗑</button></div>' +
       '<button class="btn primary pay" data-cart="pay"' + (r.lines.length ? '' : ' disabled') + '>' + t('pay') + ' (F4)</button>';
   },
   pushDisplay() {
@@ -340,6 +342,7 @@ const Sell = {
     else if (a === 'edit') return this.editLine(i);
     else if (a === 'disc') return this.invoiceDiscount();
     else if (a === 'cust') return customerPicker();
+    else if (a === 'coupon') return couponPicker();
     else if (a === 'pay') return this.pay();
     this.renderCart(); this.pushDisplay();
   },
@@ -377,7 +380,7 @@ const Sell = {
     if (!App.cart.lines.length) return;
     if (!App.shift) return openShiftModal();
     const r = this.calc(); if (r.total < 0) return;
-    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'cref', label: t('cardRef') }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }];
+    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'cref', label: t('cardRef') }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }, { k: 'gc', label: t('giftUseNo') }, { k: 'gca', label: t('giftUseAmt'), type: 'number', step: 'any' }];
     const quick = [r.total, 50, 100, 200, 500].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
     const cust = App.cart.customerId ? App.db.customers.find((x) => x.id === App.cart.customerId) : null;
     modal({ title: t('pay'), cls: 'wide', body: '<div class="paytot">' + t('total') + ': <b>' + money(r.total) + ' ' + esc(cur()) + '</b></div><div class="grid3">' + form(fields) + '</div>' +
@@ -385,8 +388,8 @@ const Sell = {
       (cust && App.db.settings.loyaltyEnabled ? '<label class="chk"><input type="checkbox" id="redeem"' + (App.cart.redeem ? ' checked' : '') + '> ' + t('redeemPoints', { n: cust.points || 0 }) + '</label>' : ''),
       buttons: [{ label: t('cancel') }, { label: t('completeSale'), cls: 'primary', onClick: (w) => doPay(w, fields) }], enter: 1,
       onOpen: (w) => {
-        const upd = () => { const v = readForm(w, fields); let cr = 0; try { if (v.xr) cr = Math.min(Core.checkExchangeReceipt(App.db, v.xr).amount, r.total); } catch (e) {} const paid = (v.cash || 0) + (v.card || 0) + (v.other || 0) + cr; const rem = Core.r2(r.total - paid);
-          $('#paystat', w).innerHTML = rem > 0.004 ? '<span class="bad">' + t('remaining') + ': ' + money(rem) + '</span>' : '<span class="good">' + t('change') + ': ' + money(-rem) + '</span>'; };
+        const upd = () => { const v = readForm(w, fields); let cr = 0; try { if (v.xr) cr = Math.min(Core.checkExchangeReceipt(App.db, v.xr).amount, r.total); } catch (e) {} let gv = 0; try { if (v.gc) gv = Math.min(Core.checkGiftCard(App.db, v.gc).balance, Core.r2(r.total - cr), v.gca > 0 ? v.gca : Infinity); } catch (e) {} const paid = (v.cash || 0) + (v.card || 0) + (v.other || 0) + cr + gv; const rem = Core.r2(r.total - paid);
+          $('#paystat', w).innerHTML = rem > 0.004 ? '<span class="bad">' + t('remaining') + ': ' + money(rem) + '</span>' : '<span class="good">' + t('change') + ': ' + money(-rem) + '</span>'; if (gv > 0) $('#paystat', w).innerHTML += ' · ' + t('giftCovers') + ': ' + money(gv); };
         w.addEventListener('input', (e) => { if (e.target.id === 'redeem') { App.cart.redeem = e.target.checked; w.close(); Sell.renderCart(); Sell.pay(); return; } upd(); });
         w.addEventListener('click', (e) => { if (e.target.dataset.q) { $('[name=cash]', w).value = e.target.dataset.q; $('[name=card]', w).value = ''; $('[name=other]', w).value = ''; upd(); } if (e.target.hasAttribute('data-card-all')) { $('[name=card]', w).value = r.total; $('[name=cash]', w).value = ''; $('[name=other]', w).value = ''; upd(); } });
         const cashEl = $('[name=cash]', w); cashEl.focus(); upd();
@@ -399,8 +402,8 @@ async function doPay(w, fields) {
   const payments = [{ method: 'cash', amount: v.cash || 0 }, { method: 'card', amount: v.card || 0, ref: (v.cref || '').trim() }, { method: 'other', amount: v.other || 0 }].filter((p) => p.amount > 0);
   const c = App.cart; const r = Sell.calc(); const cust = c.customerId ? App.db.customers.find((x) => x.id === c.customerId) : null;
   try {
-    const sale = Core.finalizeSale(App.db, { cart: { lines: c.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it.group, taxExempt: it.taxExempt }); }), invPct: c.invPct, invAmt: c.invAmt, redeemValue: r.redeemValue },
-      payments, exchangeReceiptNo: xrNo || undefined, user: App.user, shiftId: App.shift.id, customerId: c.customerId, customerName: cust ? cust.name : '', profileName: App.shift.profileName });
+    const sale = Core.finalizeSale(App.db, { cart: { lines: c.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it.group, taxExempt: it.taxExempt }); }), invPct: c.invPct, invAmt: c.invAmt, redeemValue: r.redeemValue, coupon: c.couponCode ? { code: c.couponCode } : undefined },
+      payments, exchangeReceiptNo: xrNo || undefined, giftCardNo: (v.gc || '').trim() || undefined, giftAmount: v.gca > 0 ? v.gca : undefined, user: App.user, shiftId: App.shift.id, customerId: c.customerId, customerName: cust ? cust.name : '', profileName: App.shift.profileName });
     if (c.approvedBy) sale.approvedBy = c.approvedBy;
     await save(true);
     if (App.db.settings.printer && App.db.settings.printer.drawerOnCash && App.db.settings.printer.type !== 'system' && sale.payments.some((p) => p.method === 'cash')) { try { window.api.openDrawer(App.db.settings.printer); } catch (e) {} }
@@ -442,6 +445,16 @@ function customerPicker() {
     $('#cl', m).innerHTML = hits.map((c) => '<div class="rowline"><span>' + esc(c.name) + ' <small class="muted">' + esc(c.phone || '') + '</small></span><button class="btn sm primary" data-pick="' + c.id + '">' + t('select') + '</button></div>').join('') || '<div class="empty">' + t('none') + '</div>'; };
   m.addEventListener('input', draw); m.addEventListener('click', (e) => { if (e.target.dataset.pick) { App.cart.customerId = e.target.dataset.pick; Sell.renderCart(); m.close(); } }); draw();
 }
+function couponPicker() {
+  const cur0 = App.cart.couponCode;
+  const m = modal({ title: t('cpButton'), body: '<label>' + t('cpEnter') + '</label><input id="cp-code" dir="ltr" value="' + esc(cur0 || '') + '" autofocus autocomplete="off">', enter: 1,
+    buttons: [{ label: t('cancel') }, { label: t('cpRemove'), onClick: () => { App.cart.couponCode = ''; Sell.renderCart(); Sell.pushDisplay(); } }, { label: t('cpApply'), cls: 'primary', onClick: (w) => {
+      const code = $('#cp-code', w).value.trim().toUpperCase(); if (!code) return false;
+      try { Core.checkCoupon(App.db, code, { customerId: App.cart.customerId }); const r0 = Core.computeCart({ lines: App.cart.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it ? it.group : '', taxExempt: it && it.taxExempt }); }), coupon: Core.findCoupon(App.db, code) }, App.db.promos, App.db.settings);
+        if (!(r0.couponDisc > 0)) { toast(t('err_COUPON_MIN_TOTAL'), 'err'); return false; }
+        App.cart.couponCode = code; Sell.renderCart(); Sell.pushDisplay(); toast(t('cpApplied')); } catch (e) { toast(errMsg(e), 'err'); return false; } } }] });
+  return m;
+}
 function openShiftModal() {
   const fields = [{ k: 'cash', label: t('openingCash'), type: 'number', step: 'any', def: 0, first: true }, { k: 'profile', label: t('profileName'), def: App.db.settings.storeName }];
   modal({ title: t('openShift'), body: '<div class="grid2">' + form(fields) + '</div>', buttons: [{ label: t('cancel') }, { label: t('openShift'), cls: 'primary', onClick: (w) => {
@@ -464,7 +477,14 @@ function termsBlock(s) {
   const a = (s.receiptTermsAr || '').trim(), e = (s.receiptTermsEn || '').trim(); if (!a && !e) return '';
   return '<hr><div class="sm" style="white-space:pre-wrap">' + (a ? '<div dir="rtl">' + esc(a) + '</div>' : '') + (e ? '<div dir="ltr">' + esc(e) + '</div>' : '') + '</div>';
 }
+function giftVoucherHTML(doc, l) {
+  const s = App.db.settings; const g = Core.findGiftCard(App.db, doc.giftCardNo) || {}; const rtl = l === 'ar'; const w = s.receiptWidth === 58 ? '54mm' : '76mm'; const m = (n) => money(n, l);
+  return '<!doctype html><html dir="' + (rtl ? 'rtl' : 'ltr') + '" lang="' + l + '"><head><meta charset="utf-8"><style>@page{size:' + w + ' auto;margin:0}*{box-sizing:border-box}body{width:' + w + ';margin:0 auto;padding:3mm;font:12px/1.35 "Segoe UI",Tahoma,Arial,sans-serif;color:#000}h2,h3,p{margin:0;text-align:center}.big{font-size:20px;font-weight:bold}</style></head><body>' +
+    '<h2>' + esc(s.storeName) + '</h2><hr><h3>' + tr('rcGiftTitle', l) + '</h3><p>' + barcodeSvg(g.no || doc.giftCardNo) + '</p><p class="big">' + m(g.initial != null ? g.initial : doc.total) + ' ' + esc(s.currency) + '</p>' +
+    '<p>' + tr('rcGiftValid', l) + ': ' + esc(g.expiresOn || tr('rcGiftNoExpiry', l)) + '</p><hr><p>' + esc(doc.no) + ' · ' + new Date(doc.ts).toLocaleDateString(rtl ? locFor('ar') : 'en-GB') + '</p>' + termsBlock(s) + '</body></html>';
+}
 function receiptHTML(doc, l) {
+  if (doc.type === 'giftsale') return giftVoucherHTML(doc, l || App.db.settings.receiptLang);
   const s = App.db.settings; l = l || s.receiptLang; const rtl = l === 'ar'; const w = s.receiptWidth === 58 ? '54mm' : '76mm';
   const m = (n) => money(n, l); const isRet = doc.type === 'return';
   const rows = (isRet ? doc.lines.map((x) => ({ name: (l === 'en' && x.nameEn) ? x.nameEn : x.name, qty: x.qty, total: -x.value })) : doc.lines.map((x) => ({ name: (l === 'en' && x.nameEn) ? x.nameEn : x.name, qty: x.qty, price: x.price, total: x.total, promo: x.promoNames })));
@@ -477,6 +497,8 @@ function receiptHTML(doc, l) {
     (isRet ? '<table><tr class="big"><td>' + tr('rcRefund', l) + '</td><td class="e">' + m(doc.refund) + ' ' + esc(s.currency) + '</td></tr></table>' :
       '<table>' + (doc.lineDisc + doc.invoiceDisc > 0 ? '<tr><td>' + tr('rcSaved', l) + '</td><td class="e">' + m(doc.lineDisc + doc.invoiceDisc) + '</td></tr>' : '') + '<tr><td>' + tr('incl_tax', l) + '</td><td class="e">' + m(doc.tax) + '</td></tr><tr class="big"><td>' + tr('total', l) + '</td><td class="e">' + m(doc.total) + ' ' + esc(s.currency) + '</td></tr>' + pay + (doc.change > 0 ? '<tr><td>' + tr('change', l) + '</td><td class="e">' + m(doc.change) + '</td></tr>' : '') + '</table>') +
     (doc.exchangeCredit ? '<table><tr><td>' + tr('rcCreditUsed', l) + ' ' + esc(doc.exchangeCredit.no) + '</td><td class="e">' + m(doc.exchangeCredit.amount) + '</td></tr></table>' : '') +
+    (doc.coupon ? '<table><tr><td>' + tr('rcCoupon', l) + ' ' + esc(doc.coupon.code) + '</td><td class="e">−' + m(doc.coupon.amount) + '</td></tr></table>' : '') +
+    (doc.giftCard ? (() => { const g = Core.findGiftCard(App.db, doc.giftCard.no); return '<table><tr><td>' + tr('rcGiftCard', l) + ' ' + esc(doc.giftCard.no) + '</td><td class="e">' + m(doc.giftCard.amount) + '</td></tr>' + (g ? '<tr><td>' + tr('rcGiftLeft', l) + '</td><td class="e">' + m(g.balance) + '</td></tr>' : '') + '</table>'; })() : '') +
     exchangeBlock(doc, l, m) + termsBlock(s) +
     '<hr><p>' + esc(s.receiptFooter || tr('rcThanks', l)) + '</p><p class="sm">' + esc(doc.no) + '</p></body></html>';
 }

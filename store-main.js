@@ -4,7 +4,7 @@
 //  - K is wrapped three ways in keystore.json: by the passphrase, by the recovery key, and (mode 'os') by the Windows account (safeStorage/DPAPI)
 //  - backups are encrypted copies of the same database plus a sidecar with the passphrase/recovery wraps, so they restore on any PC
 const fs = require('fs'); const path = require('path'); const crypto = require('crypto');
-const COLLS = ['users', 'items', 'customers', 'suppliers', 'promos', 'sales', 'purchases', 'shifts', 'held', 'exchangeReceipts', 'edits', 'audit'];
+const COLLS = ['users', 'items', 'customers', 'suppliers', 'promos', 'sales', 'purchases', 'shifts', 'held', 'exchangeReceipts', 'edits', 'giftCards', 'coupons', 'audit'];
 
 const b32 = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function newRecoveryKey() { // 160 bits as 32 chars from a 32-letter alphabet, shown as 8 groups of 4

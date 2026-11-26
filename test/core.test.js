@@ -359,3 +359,93 @@ t('normal (non-blind) close closes at once; approver cannot approve his own blin
   const { db, boss, sh } = mk2(); C.upgradeRoles(db); const bs = C.openShift(db, boss, 10); C.closeShift(db, bs, 10, ''); assert.strictEqual(bs.approval, 'auto'); assert.strictEqual(bs.diff, 0);
   const s2 = C.openShift(db, boss, 10); C.closeShift(db, s2, 10, '', { blind: true }); throws(() => C.approveClose(db, s2, boss, ''), 'SELF_APPROVE');
 });
+
+// ---- gift cards and coupons ----
+const gk = () => { const db = mk(); C.upgradeRoles(db); const [boss, cash] = db.users; const sh = C.openShift(db, cash, 100); return { db, boss, cash, sh }; };
+const sellG = (x, amt, extra) => C.sellGiftCard(x.db, Object.assign({ amount: amt, payments: [{ method: 'cash', amount: amt }], user: x.cash, shiftId: x.sh.id }, extra || {}));
+const buy = (x, qty, payments, extra) => C.finalizeSale(x.db, Object.assign({ cart: Object.assign({ lines: [line('a', 'G1', qty, 10)] }, (extra && extra.cart) || {}), payments, user: x.cash, shiftId: x.sh.id }, Object.assign({}, extra, { cart: undefined }, (extra && extra.cart) ? { cart: Object.assign({ lines: [line('a', 'G1', qty, 10)] }, extra.cart) } : {})));
+t('gift card sale: card issued, not revenue, cash counted in the drawer', () => {
+  const x = gk(); const r = sellG(x, 100);
+  assert.strictEqual(r.card.balance, 100); assert.strictEqual(r.sale.type, 'giftsale'); assert.strictEqual(r.sale.tax, 0);
+  const rep = C.salesReport(x.db, '2000-01-01', '2999-01-01'); assert.strictEqual(rep.total, 0); assert.strictEqual(rep.count, 0);
+  const sum = C.shiftSummary(x.db, x.sh); assert.strictEqual(sum.salesTotal, 0); assert.strictEqual(sum.giftSoldTotal, 100); assert.strictEqual(sum.expectedCash, 200);
+  assert.deepStrictEqual(C.giftLiability(x.db), { open: 100, expired: 0, count: 1 });
+});
+t('gift card sale: pre-printed number, duplicate number, bad amount, short payment', () => {
+  const x = gk(); sellG(x, 50, { no: 'card-0001' }); assert.ok(C.findGiftCard(x.db, 'CARD-0001'));
+  throws(() => sellG(x, 50, { no: 'CARD-0001' }), 'GIFT_EXISTS'); throws(() => sellG(x, 0), 'GIFT_BAD_AMOUNT');
+  throws(() => C.sellGiftCard(x.db, { amount: 100, payments: [{ method: 'cash', amount: 60 }], user: x.cash, shiftId: x.sh.id }), 'UNDERPAID');
+  throws(() => C.sellGiftCard(x.db, { amount: 100, payments: [{ method: 'gift', amount: 100 }], user: x.cash, shiftId: x.sh.id }), 'GIFT_PAY_WITH_CREDIT');
+});
+t('gift card redeem: partial then full, balance and history tracked', () => {
+  const x = gk(); const g = sellG(x, 100).card;
+  const s1 = C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 4, 10)] }, payments: [], giftCardNo: g.no, user: x.cash, shiftId: x.sh.id });
+  assert.strictEqual(s1.giftCard.amount, 40); assert.strictEqual(g.balance, 60); assert.strictEqual(s1.paid, 40);
+  const s2 = C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)] }, payments: [{ method: 'cash', amount: 40 }], giftCardNo: g.no, user: x.cash, shiftId: x.sh.id });
+  assert.strictEqual(s2.giftCard.amount, 60); assert.strictEqual(g.balance, 0); assert.strictEqual(g.log.length, 3);
+  throws(() => C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 1, 10)] }, payments: [], giftCardNo: g.no, user: x.cash, shiftId: x.sh.id }), 'GIFT_EMPTY');
+});
+t('gift card redeem: cap by giftAmount, cash makes up the rest, shortfall is UNDERPAID', () => {
+  const x = gk(); const g = sellG(x, 100).card;
+  throws(() => C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)] }, payments: [], giftCardNo: g.no, giftAmount: 30, user: x.cash, shiftId: x.sh.id }), 'UNDERPAID');
+  assert.strictEqual(g.balance, 100); // a failed sale leaves the card untouched
+  const s = C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)] }, payments: [{ method: 'cash', amount: 70 }], giftCardNo: g.no, giftAmount: 30, user: x.cash, shiftId: x.sh.id });
+  assert.strictEqual(g.balance, 70); assert.strictEqual(s.giftCard.amount, 30);
+});
+t('gift card: missing, expired, void are refused', () => {
+  const x = gk(); throws(() => C.checkGiftCard(x.db, 'NOPE'), 'GIFT_MISSING');
+  const g = sellG(x, 100, { expiresOn: '2999-01-01' }).card; assert.ok(C.checkGiftCard(x.db, g.no));
+  g.expiresOn = '2000-01-01'; throws(() => C.checkGiftCard(x.db, g.no), 'GIFT_EXPIRED'); assert.strictEqual(C.giftLiability(x.db).expired, 100);
+  C.extendGiftCard(x.db, g.no, x.boss, '2999-01-01'); assert.ok(C.checkGiftCard(x.db, g.no));
+  throws(() => C.sellGiftCard(x.db, { amount: 10, expiresOn: '2000-01-01', payments: [{ method: 'cash', amount: 10 }], user: x.cash, shiftId: x.sh.id }), 'GIFT_BAD_EXPIRY');
+});
+t('gift card: void a sale puts the balance back; return refunds to the card pro-rata', () => {
+  const x = gk(); const g = sellG(x, 100).card;
+  const s = C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)] }, payments: [{ method: 'cash', amount: 50 }], giftCardNo: g.no, giftAmount: 50, user: x.cash, shiftId: x.sh.id });
+  assert.strictEqual(g.balance, 50);
+  const r = C.finalizeReturn(x.db, s.id, [{ idx: 0, qty: 5 }], x.boss, { shiftId: x.sh.id });
+  assert.strictEqual(r.refund, 50); assert.strictEqual(r.giftRefund, 25); assert.strictEqual(g.balance, 75);
+  const sum = C.shiftSummary(x.db, x.sh); assert.strictEqual(sum.refunds.cash, 25); assert.strictEqual(sum.refunds.gift, 25);
+  const y = gk(); const g2 = sellG(y, 100).card;
+  const s2 = C.finalizeSale(y.db, { cart: { lines: [line('a', 'G1', 4, 10)] }, payments: [], giftCardNo: g2.no, user: y.cash, shiftId: y.sh.id });
+  C.voidSale(y.db, s2.id, y.boss, 'x'); assert.strictEqual(g2.balance, 100);
+  assert.ok(C.editBlockers(x.db, s).includes('EDIT_HAS_GIFT'));
+});
+t('gift card: void only when unused', () => {
+  const x = gk(); const g = sellG(x, 100).card; const g2 = sellG(x, 50).card;
+  C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 1, 10)] }, payments: [], giftCardNo: g.no, user: x.cash, shiftId: x.sh.id });
+  throws(() => C.voidGiftCard(x.db, g.no, x.boss, 'r'), 'GIFT_ALREADY_USED'); throws(() => C.voidGiftCard(x.db, g2.no, x.cash, 'r'), 'MANAGER_ONLY');
+  C.voidGiftCard(x.db, g2.no, x.boss, 'sold by mistake'); assert.strictEqual(g2.status, 'void'); assert.strictEqual(C.shiftSummary(x.db, x.sh).giftSoldTotal, 100);
+  throws(() => C.checkGiftCard(x.db, g2.no), 'GIFT_VOID');
+});
+const cpnDb = () => { const x = gk(); C.saveCoupon(x.db, { code: 'save10', kind: 'percent', value: 10 }); return x; };
+t('coupon percent: discounts the invoice, lines become exchange-only, usage counted, void gives it back', () => {
+  const x = cpnDb(); const s = C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)], coupon: { code: 'SAVE10' } }, payments: [{ method: 'cash', amount: 90 }], user: x.cash, shiftId: x.sh.id });
+  assert.strictEqual(s.total, 90); assert.strictEqual(s.coupon.amount, 10); assert.ok(s.lines[0].exchangeOnly); assert.strictEqual(C.findCoupon(x.db, 'save10').used, 1);
+  C.voidSale(x.db, s.id, x.boss, 'x'); assert.strictEqual(C.findCoupon(x.db, 'SAVE10').used, 0);
+});
+t('coupon amount sits on top of an invoice promo and never exceeds the total', () => {
+  const x = gk(); C.saveCoupon(x.db, { code: 'OFF500', kind: 'amount', value: 500 });
+  const r = C.computeCart({ lines: [line('a', 'G1', 2, 10)], coupon: C.findCoupon(x.db, 'OFF500') }, [], S); assert.strictEqual(r.total, 0);
+  C.saveCoupon(x.db, { code: 'OFF5', kind: 'amount', value: 5 });
+  const p = { id: 'i', name: 'i', type: 'invoice_pct', scope: { type: 'all' }, params: { percent: 10 } };
+  const r2_ = C.computeCart({ lines: [line('a', 'G1', 10, 10)], coupon: C.findCoupon(x.db, 'OFF5') }, [p], S); assert.strictEqual(r2_.total, 85);
+});
+t('coupon rules: min total, validity, usage limits, per customer', () => {
+  const x = gk(); const mkc = (o) => C.saveCoupon(x.db, Object.assign({ code: 'C' + Math.random().toString(36).slice(2, 7), kind: 'amount', value: 5 }, o));
+  throws(() => C.checkCoupon(x.db, 'NOPE'), 'COUPON_MISSING');
+  const cm = mkc({ minTotal: 200 }); throws(() => C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)], coupon: { code: cm.code } }, payments: [{ method: 'cash', amount: 100 }], user: x.cash, shiftId: x.sh.id }), 'COUPON_MIN_TOTAL');
+  throws(() => C.checkCoupon(x.db, mkc({ endDate: '2000-01-01' }).code), 'COUPON_EXPIRED'); throws(() => C.checkCoupon(x.db, mkc({ startDate: '2999-01-01' }).code), 'COUPON_NOT_STARTED');
+  throws(() => C.checkCoupon(x.db, mkc({ active: false }).code), 'COUPON_INACTIVE');
+  const one = mkc({ maxUses: 1 }); C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 2, 10)], coupon: { code: one.code } }, payments: [{ method: 'cash', amount: 15 }], user: x.cash, shiftId: x.sh.id });
+  throws(() => C.checkCoupon(x.db, one.code), 'COUPON_USED_UP');
+  const pc = mkc({ maxPerCustomer: 1 }); throws(() => C.checkCoupon(x.db, pc.code, {}), 'COUPON_NEEDS_CUSTOMER');
+  x.db.customers.push({ id: 'cu1', name: 'Z', points: 0 }); C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 2, 10)], coupon: { code: pc.code } }, payments: [{ method: 'cash', amount: 15 }], customerId: 'cu1', user: x.cash, shiftId: x.sh.id });
+  throws(() => C.checkCoupon(x.db, pc.code, { customerId: 'cu1' }), 'COUPON_CUSTOMER_LIMIT'); assert.ok(C.checkCoupon(x.db, pc.code, { customerId: 'cu2' }));
+  throws(() => C.saveCoupon(x.db, { code: 'x', kind: 'percent', value: 5 }), 'COUPON_BAD_CODE'); throws(() => C.saveCoupon(x.db, { code: 'ABC', kind: 'percent', value: 150 }), 'COUPON_BAD_VALUE');
+});
+t('coupon plus gift card in one sale', () => {
+  const x = cpnDb(); const g = sellG(x, 100).card;
+  const s = C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)], coupon: { code: 'SAVE10' } }, payments: [], giftCardNo: g.no, user: x.cash, shiftId: x.sh.id });
+  assert.strictEqual(s.total, 90); assert.strictEqual(s.giftCard.amount, 90); assert.strictEqual(g.balance, 10);
+});

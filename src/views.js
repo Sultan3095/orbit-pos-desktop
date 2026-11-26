@@ -183,6 +183,76 @@ function promoModal(p, done, preset) {
   m.addEventListener('change', (e) => { if (e.target.name === 'type' || e.target.name === 'scopeType') { if (e.target.name === 'scopeType') $('[name=scopeValue]', m).innerHTML = ''; sync(); } }); sync();
 }
 
+// ---------------- Gift cards ----------------
+function giftState(g) {
+  if (g.status === 'void') return ['giftVoid', 'bad'];
+  if (g.expiresOn && Core.today(new Date()) > g.expiresOn) return ['giftExpiredTag', 'bad'];
+  if (!(g.balance > 0)) return ['giftUsed', 'dim'];
+  return ['giftActive', 'good'];
+}
+Views.gifts = function (m) {
+  const st = App.edit || (App.edit = {}); st.gq = st.gq || '';
+  const liab = Core.giftLiability(App.db);
+  const q = st.gq.toLowerCase();
+  const cards = (App.db.giftCards || []).slice().reverse().filter((g) => !q || g.no.toLowerCase().includes(q) || (g.customerName || '').toLowerCase().includes(q));
+  const mgr = can('voidGiftCard');
+  m.innerHTML = head(t('nav_gifts'), '<button class="btn primary" id="g-sell">🎁 ' + t('giftSell') + '</button>') + '<p class="muted">' + t('giftHelp') + '</p>' +
+    '<div class="cards3"><div class="card"><small>' + t('giftLiabilityLine') + '</small><b>' + money(liab.open) + ' ' + esc(cur()) + '</b></div><div class="card"><small>' + t('giftCount') + '</small><b>' + liab.count + '</b></div><div class="card"><small>' + t('giftExpiredLine') + '</small><b>' + money(liab.expired) + '</b></div></div>' +
+    '<div class="bar"><input id="g-q" placeholder="' + t('giftNo') + ' / ' + t('customer') + '" value="' + esc(st.gq) + '"><button class="btn" id="g-check">' + t('giftCheck') + '</button></div>' +
+    table([t('giftNo'), t('giftInitial'), t('giftBalance'), t('giftIssued'), t('giftExpires'), t('giftStatus'), ''], cards.map((g) => { const s = giftState(g); return '<tr class="' + (s[1] === 'dim' ? 'dim' : '') + '"><td dir="ltr">' + esc(g.no) + '</td><td>' + money(g.initial) + '</td><td><b>' + money(g.balance) + '</b></td><td>' + esc(g.issuedOn) + '</td><td>' + esc(g.expiresOn || t('giftNever')) + '</td><td class="' + s[1] + '">' + t(s[0]) + '</td><td><button class="btn sm" data-gh="' + g.id + '">' + t('details') + '</button>' + (mgr && g.status !== 'void' ? ' <button class="btn sm" data-ge="' + g.id + '">' + t('giftExtend') + '</button>' : '') + (mgr && g.status !== 'void' && g.balance === g.initial && g.log.length === 1 ? ' <button class="btn sm danger" data-gv="' + g.id + '">' + t('giftVoid') + '</button>' : '') + '</td></tr>'; }));
+  const again = () => Views.gifts(m);
+  $('#g-q', m).oninput = (e) => { st.gq = e.target.value; const pos = e.target.selectionStart; again(); const i = $('#g-q', m); i.focus(); i.setSelectionRange(pos, pos); };
+  m.onclick = async (e) => {
+    if (e.target.id === 'g-sell') return giftSellModal(again);
+    if (e.target.id === 'g-check') return giftCheckModal();
+    const gh = e.target.closest('[data-gh]'); if (gh) return giftHistoryModal(App.db.giftCards.find((x) => x.id === gh.dataset.gh));
+    const ge = e.target.closest('[data-ge]'); if (ge) { const g = App.db.giftCards.find((x) => x.id === ge.dataset.ge); const f = [{ k: 'd', label: t('giftExpires'), type: 'date', def: g.expiresOn, first: true }];
+      return modal({ title: t('giftExtend') + ' ' + g.no, body: form(f), buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: (w) => { try { Core.extendGiftCard(App.db, g.no, App.user, readForm(w, f).d); save(); again(); } catch (er) { toast(errMsg(er), 'err'); return false; } } }], enter: 1 }); }
+    const gv = e.target.closest('[data-gv]'); if (gv) { const g = App.db.giftCards.find((x) => x.id === gv.dataset.gv); if (await confirmBox(t('giftVoidQ'))) { try { Core.voidGiftCard(App.db, g.no, App.user, ''); save(true); again(); } catch (er) { toast(errMsg(er), 'err'); } } }
+  };
+};
+function giftHistoryModal(g) {
+  const kinds = { issue: sb('إصدار', 'Issued'), redeem: sb('استخدام', 'Used'), refund: sb('مرتجع على الكارت', 'Refunded to card'), 'void-restore': sb('إلغاء فاتورة (رجوع الرصيد)', 'Invoice voided (balance back)'), void: sb('إلغاء الكارت', 'Card cancelled'), expiry: sb('تغيير الانتهاء', 'Expiry changed') };
+  modal({ title: t('giftHistory') + ' ' + g.no, body: '<p>' + t('giftBalance') + ': <b>' + money(g.balance) + ' ' + esc(cur()) + '</b></p>' + table([t('time'), t('type'), t('amount'), t('giftBalance'), ''], g.log.map((x) => '<tr><td>' + fmtDT(x.ts) + '</td><td>' + (kinds[x.kind] || x.kind) + '</td><td>' + money(x.amount) + '</td><td>' + money(x.balance) + '</td><td>' + esc(x.ref || '') + '</td></tr>')) });
+}
+function giftCheckModal() {
+  const m = modal({ title: t('giftCheck'), body: '<label>' + t('giftNo') + '</label><input id="gc-no" dir="ltr" autofocus autocomplete="off"><div id="gc-out" style="margin-top:12px"></div>', buttons: [{ label: t('close') }] });
+  const run = () => { const no = $('#gc-no', m).value; const g = Core.findGiftCard(App.db, no); $('#gc-out', m).innerHTML = !g ? '<span class="bad">' + t('err_GIFT_MISSING') + '</span>' : (() => { const s = giftState(g); return '<div class="paytot">' + t('giftBalance') + ': <b>' + money(g.balance) + ' ' + esc(cur()) + '</b></div><p class="' + s[1] + '">' + t(s[0]) + (g.expiresOn ? ' · ' + t('giftExpires') + ': ' + esc(g.expiresOn) : '') + '</p>'; })(); };
+  m.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); run(); } }); m.addEventListener('input', run);
+}
+function giftSellModal(done) {
+  if (!App.shift) return openShiftModal();
+  const fields = [{ k: 'amount', label: t('giftAmount'), type: 'number', step: 'any', first: true }, { k: 'no', label: t('giftNo'), ph: t('giftNoHint'), wide: true }, { k: 'days', label: t('giftExpiryDays'), type: 'number' },
+    { k: 'customer', label: t('giftCustomer') }, { k: 'method', label: t('giftPayMethod'), type: 'select', opts: [['cash', t('pm_cash')], ['card', t('pm_card')], ['other', t('pm_other')]] }, { k: 'ref', label: t('cardRef') }];
+  modal({ title: t('giftSell'), cls: 'wide', body: '<div class="grid3">' + form(fields) + '</div><p class="muted sm">' + t('giftHelp') + '</p>', buttons: [{ label: t('cancel') }, { label: t('giftSell'), cls: 'primary', onClick: async (w) => {
+    const v = readForm(w, fields); if (!(v.amount > 0)) { toast(t('err_GIFT_BAD_AMOUNT'), 'err'); return false; }
+    try {
+      const r = Core.sellGiftCard(App.db, { amount: v.amount, no: v.no, expiresDays: v.days || 0, customerName: v.customer, payments: [{ method: v.method, amount: v.amount, ref: v.ref }], user: App.user, shiftId: App.shift.id });
+      await save(true); done();
+      if (App.db.settings.printer && App.db.settings.printer.drawerOnCash && App.db.settings.printer.type !== 'system' && v.method === 'cash') { try { window.api.openDrawer(App.db.settings.printer); } catch (e) {} }
+      modal({ title: t('giftSold'), body: '<div class="paytot"><b dir="ltr">' + esc(r.card.no) + '</b></div><div class="paytot">' + money(r.card.balance) + ' ' + esc(cur()) + '</div>', buttons: [{ label: t('close') }, { label: '🖨 ' + t('print'), cls: 'primary', onClick: () => { printReceipt(r.sale); return false; } }], enter: 1 });
+    } catch (e) { toast(errMsg(e), 'err'); return false; } } }], enter: 1 });
+}
+
+// ---------------- Coupons ----------------
+Views.coupons = function (m) {
+  const list = (App.db.coupons || []).slice().reverse();
+  m.innerHTML = head(t('nav_coupons'), '<button class="btn primary" id="cp-add">+ ' + t('cpAdd') + '</button>') + '<p class="muted">' + t('cpHelp') + '</p>' +
+    table([t('cpCode'), t('cpKind'), t('cpValue'), t('cpMinTotal'), t('period'), t('cpUsed'), t('active'), ''], list.map((c) => '<tr class="' + (c.active === false ? 'dim' : '') + '"><td dir="ltr"><b>' + esc(c.code) + '</b></td><td>' + t(c.kind === 'percent' ? 'cpPercent' : 'cpAmount') + '</td><td>' + (c.kind === 'percent' ? c.value + '%' : money(c.value)) + '</td><td>' + (c.minTotal ? money(c.minTotal) : '-') + '</td><td>' + esc((c.startDate || '…') + ' → ' + (c.endDate || '…')) + '</td><td>' + Core.couponUses(App.db, c.code).all + (c.maxUses ? ' / ' + c.maxUses : '') + '</td><td>' + (c.active === false ? '✗' : '✓') + '</td><td><button class="btn sm" data-ce="' + c.id + '">' + t('edit') + '</button> <button class="btn sm danger" data-cd="' + c.id + '">✕</button></td></tr>'));
+  m.onclick = async (e) => {
+    if (e.target.id === 'cp-add') return couponModal(null, () => Views.coupons(m));
+    const ce = e.target.closest('[data-ce]'); if (ce) return couponModal(App.db.coupons.find((x) => x.id === ce.dataset.ce), () => Views.coupons(m));
+    const cd = e.target.closest('[data-cd]'); if (cd && await confirmBox(t('deleteQ'))) { App.db.coupons = App.db.coupons.filter((x) => x.id !== cd.dataset.cd); save(); Views.coupons(m); }
+  };
+};
+function couponModal(c, done) {
+  const fields = [{ k: 'code', label: t('cpCode'), first: true }, { k: 'kind', label: t('cpKind'), type: 'select', opts: [['percent', t('cpPercent')], ['amount', t('cpAmount')]] }, { k: 'value', label: t('cpValue'), type: 'number', step: 'any' },
+    { k: 'minTotal', label: t('cpMinTotal'), type: 'number', step: 'any' }, { k: 'startDate', label: t('startDate'), type: 'date' }, { k: 'endDate', label: t('endDate'), type: 'date' },
+    { k: 'maxUses', label: t('cpMaxUses'), type: 'number' }, { k: 'maxPerCustomer', label: t('cpMaxPerCustomer'), type: 'number' }, { k: 'active', type: 'check', label: '', hint: t('active') }];
+  modal({ title: c ? t('cpEdit') : t('cpAdd'), cls: 'wide', body: '<div class="grid3">' + form(fields, c ? Object.assign({}, c, { active: c.active !== false }) : { active: true, kind: 'percent' }) + '</div><p class="muted sm">' + t('cpHelp') + '</p>', buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: (w) => {
+    const v = readForm(w, fields); try { Core.saveCoupon(App.db, Object.assign({}, v, { id: c && c.id })); save(); done(); } catch (e) { toast(errMsg(e), 'err'); return false; } } }], enter: 1 });
+}
+
 // ---------------- People (customers & suppliers) ----------------
 Views.people = function (m) {
   const st = App.edit && App.edit.people || (App.edit = Object.assign(App.edit || {}, { people: 'customers' })).people;
@@ -256,7 +326,7 @@ Views.shift = function (m) {
     const z = e.target.closest('[data-z]'); if (z) printZ(App.db.shifts.find((x) => x.id === z.dataset.z));
   };
 };
-const PERM_LABELS = {"sell": ["البيع", "Sell"], "discountUpTo": ["خصم في الحد المسموح", "Discount within limit"], "discountAbove": ["خصم فوق الحد", "Discount above limit"], "priceOverride": ["تغيير سعر الصنف", "Change item price"], "voidLine": ["حذف سطر من الفاتورة", "Remove a cart line"], "customers": ["العملاء", "Customers"], "returnInWindow": ["مرتجع داخل المدة", "Return inside window"], "returnAfterWindow": ["مرتجع بعد المدة", "Return after window"], "exchangeReceipt": ["إشعار استبدال", "Exchange receipt"], "reprint": ["إعادة طباعة", "Reprint"], "editInvoice": ["تعديل فاتورة", "Edit invoice"], "voidInvoice": ["إلغاء فاتورة (شيفت مفتوح)", "Void invoice (open shift)"], "shiftOwn": ["شيفته الخاص", "Own shift"], "cashMove": ["إيداع/سحب كاش", "Cash in/out"], "cashOutAbove": ["سحب فوق الحد", "Cash-out above limit"], "seeExpected": ["يشوف المتوقع عند القفل", "See expected cash at close"], "viewOtherShifts": ["شيفتات الآخرين", "Other users shifts"], "openDrawer": ["فتح الدرج", "Open drawer"], "viewItems": ["عرض الأصناف", "View items"], "editItems": ["تعديل الأصناف", "Edit items"], "seeCost": ["التكلفة والربح", "Cost and profit"], "promos": ["العروض", "Offers"], "importPurchases": ["استيراد المشتريات", "Import purchases"], "marginTool": ["تسعير بالهامش", "Price by margin"], "reports": ["التقارير", "Reports"], "logs": ["سجل التعديلات", "Edit log"], "approve": ["يعتمد بالـ PIN", "Approve by PIN"], "settings": ["الإعدادات", "Settings"], "users": ["المستخدمين", "Users"], "backup": ["النسخ الاحتياطي", "Backup"]};
+const PERM_LABELS = {"sellGiftCard": ["بيع كارت هدية", "Sell gift cards"], "voidGiftCard": ["إلغاء/تمديد كارت هدية", "Cancel or extend gift cards"], "coupons": ["إدارة الكوبونات", "Manage coupons"], "sell": ["البيع", "Sell"], "discountUpTo": ["خصم في الحد المسموح", "Discount within limit"], "discountAbove": ["خصم فوق الحد", "Discount above limit"], "priceOverride": ["تغيير سعر الصنف", "Change item price"], "voidLine": ["حذف سطر من الفاتورة", "Remove a cart line"], "customers": ["العملاء", "Customers"], "returnInWindow": ["مرتجع داخل المدة", "Return inside window"], "returnAfterWindow": ["مرتجع بعد المدة", "Return after window"], "exchangeReceipt": ["إشعار استبدال", "Exchange receipt"], "reprint": ["إعادة طباعة", "Reprint"], "editInvoice": ["تعديل فاتورة", "Edit invoice"], "voidInvoice": ["إلغاء فاتورة (شيفت مفتوح)", "Void invoice (open shift)"], "shiftOwn": ["شيفته الخاص", "Own shift"], "cashMove": ["إيداع/سحب كاش", "Cash in/out"], "cashOutAbove": ["سحب فوق الحد", "Cash-out above limit"], "seeExpected": ["يشوف المتوقع عند القفل", "See expected cash at close"], "viewOtherShifts": ["شيفتات الآخرين", "Other users shifts"], "openDrawer": ["فتح الدرج", "Open drawer"], "viewItems": ["عرض الأصناف", "View items"], "editItems": ["تعديل الأصناف", "Edit items"], "seeCost": ["التكلفة والربح", "Cost and profit"], "promos": ["العروض", "Offers"], "importPurchases": ["استيراد المشتريات", "Import purchases"], "marginTool": ["تسعير بالهامش", "Price by margin"], "reports": ["التقارير", "Reports"], "logs": ["سجل التعديلات", "Edit log"], "approve": ["يعتمد بالـ PIN", "Approve by PIN"], "settings": ["الإعدادات", "Settings"], "users": ["المستخدمين", "Users"], "backup": ["النسخ الاحتياطي", "Backup"]};
 const stat = (l, v) => '<div class="stat"><span>' + l + '</span><b>' + v + '</b></div>';
 function cashMoveModal(kind) {
   const fields = [{ k: 'amount', label: t('amount'), type: 'number', step: 'any', first: true }, { k: 'reason', label: t('reason') }];
@@ -277,7 +347,7 @@ function printZ(sh) {
   const s = sh.summary || Core.shiftSummary(App.db, sh); const l = App.db.settings.receiptLang; const m = (n) => money(n, l);
   const row = (k, v) => '<tr><td>' + tr(k, l) + '</td><td class="e">' + v + '</td></tr>';
   const html = '<!doctype html><html dir="' + (l === 'ar' ? 'rtl' : 'ltr') + '"><head><meta charset="utf-8"><style>@page{size:76mm auto;margin:0}body{width:76mm;margin:0 auto;padding:3mm;font:12px "Segoe UI",Tahoma,Arial}h3{text-align:center;margin:2px}table{width:100%}td.e{text-align:' + (l === 'ar' ? 'left' : 'right') + '}hr{border-top:1px dashed #000;border-bottom:0}</style></head><body><h3>' + esc(App.db.settings.storeName) + '</h3><h3>' + tr('zReport', l) + '</h3><hr><table>' +
-    row('cashier', esc(sh.userName)) + row('openedAt', new Date(sh.openedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) + (sh.closedAt ? row('closedAt', new Date(sh.closedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) : '') + row('openingCash', m(sh.openingCash)) + row('salesCount', s.salesCount) + row('salesTotal', m(s.salesTotal)) + row('returns', m(s.returnsTotal)) + row('pm_cash', m(s.byMethod.cash || 0)) + row('pm_card', m(s.byMethod.card || 0)) + row('pm_other', m(s.byMethod.other || 0)) + row('cashIn', m(s.cashIn)) + row('cashOut', m(s.cashOut)) + '</table><hr><table>' + row('expectedCash', m(s.expectedCash)) + (sh.closedAt ? row('countedCash', m(sh.countedCash)) + row('difference', m(sh.diff)) : '') + '</table>' + (sh.note ? '<p>' + esc(sh.note) + '</p>' : '') + '</body></html>';
+    row('cashier', esc(sh.userName)) + row('openedAt', new Date(sh.openedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) + (sh.closedAt ? row('closedAt', new Date(sh.closedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) : '') + row('openingCash', m(sh.openingCash)) + row('salesCount', s.salesCount) + row('salesTotal', m(s.salesTotal)) + row('returns', m(s.returnsTotal)) + row('pm_cash', m(s.byMethod.cash || 0)) + row('pm_card', m(s.byMethod.card || 0)) + row('pm_other', m(s.byMethod.other || 0)) + (s.byMethod.gift ? row('pm_gift', m(s.byMethod.gift)) : '') + (s.giftSoldCount ? row('giftSold', m(s.giftSoldTotal) + ' (' + s.giftSoldCount + ')') : '') + row('cashIn', m(s.cashIn)) + row('cashOut', m(s.cashOut)) + '</table><hr><table>' + row('expectedCash', m(s.expectedCash)) + (sh.closedAt ? row('countedCash', m(sh.countedCash)) + row('difference', m(sh.diff)) : '') + '</table>' + (sh.note ? '<p>' + esc(sh.note) + '</p>' : '') + '</body></html>';
   window.api.print(html, {});
 }
 

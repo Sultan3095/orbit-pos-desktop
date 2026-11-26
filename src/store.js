@@ -3,7 +3,7 @@
 (function (root) {
   'use strict';
   const Store = {};
-  const COLLS = ['users', 'items', 'customers', 'suppliers', 'promos', 'sales', 'purchases', 'shifts', 'held', 'exchangeReceipts', 'edits', 'audit'];
+  const COLLS = ['users', 'items', 'customers', 'suppliers', 'promos', 'sales', 'purchases', 'shifts', 'held', 'exchangeReceipts', 'edits', 'giftCards', 'coupons', 'audit'];
   const HOT_SALES = 300; // sales are append-mostly: only the newest ones (and ones explicitly marked dirty) are re-checked on each save
   let snap = null;
   const keyOf = (r, i) => (r && r.id != null ? String(r.id) : '#' + i);

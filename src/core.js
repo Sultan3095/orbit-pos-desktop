@@ -67,7 +67,7 @@
       version: 1, settings: Core.defaultSettings(),
       users: [], items: [], customers: [], suppliers: [], promos: [],
       sales: [], purchases: [], shifts: [], held: [], audit: [],
-      counters: { sale: 0, purchase: 0, ret: 0, exr: 0 }, exchangeReceipts: [], edits: [],
+      counters: { sale: 0, purchase: 0, ret: 0, exr: 0, gift: 0 }, exchangeReceipts: [], edits: [], giftCards: [], coupons: [],
     };
   };
 
@@ -80,7 +80,7 @@
     ['returnInWindow', 'returns', 'Y', 'Y', 'Y'], ['returnAfterWindow', 'returns', 'A', 'Y', 'Y'], ['exchangeReceipt', 'returns', 'Y', 'Y', 'Y'], ['reprint', 'returns', 'Y', 'Y', 'Y'], ['editInvoice', 'returns', 'N', 'Y', 'Y'], ['voidInvoice', 'returns', 'N', 'Y', 'Y'],
     ['shiftOwn', 'cash', 'Y', 'Y', 'Y'], ['cashMove', 'cash', 'Y', 'Y', 'Y'], ['cashOutAbove', 'cash', 'A', 'Y', 'Y'], ['seeExpected', 'cash', 'N', 'Y', 'Y'], ['viewOtherShifts', 'cash', 'N', 'Y', 'Y'], ['openDrawer', 'cash', 'N', 'Y', 'Y'],
     ['viewItems', 'catalog', 'Y', 'Y', 'Y'], ['editItems', 'catalog', 'N', 'Y', 'Y'], ['seeCost', 'catalog', 'N', 'N', 'Y'], ['promos', 'catalog', 'N', 'Y', 'Y'], ['importPurchases', 'catalog', 'N', 'N', 'Y'], ['marginTool', 'catalog', 'N', 'N', 'Y'],
-    ['reports', 'admin', 'N', 'Y', 'Y'], ['logs', 'admin', 'N', 'Y', 'Y'], ['approve', 'admin', 'N', 'Y', 'Y'], ['settings', 'admin', 'N', 'N', 'Y'], ['users', 'admin', 'N', 'N', 'Y'], ['backup', 'admin', 'N', 'N', 'Y'],
+    ['sellGiftCard', 'selling', 'Y', 'Y', 'Y'], ['voidGiftCard', 'returns', 'N', 'Y', 'Y'], ['coupons', 'catalog', 'N', 'Y', 'Y'], ['reports', 'admin', 'N', 'Y', 'Y'], ['logs', 'admin', 'N', 'Y', 'Y'], ['approve', 'admin', 'N', 'Y', 'Y'], ['settings', 'admin', 'N', 'N', 'Y'], ['users', 'admin', 'N', 'N', 'Y'], ['backup', 'admin', 'N', 'N', 'Y'],
   ];
   Core.LOCKED_PERMS = ['settings', 'users', 'backup']; // always on for the system manager so the owner cannot lock himself out
   Core.defaultPermissions = function () {
@@ -212,7 +212,7 @@
    * Rules: manual line discount replaces promotions on that line. Non-stackable promos: best one per line wins.
    * Stackable promos apply on top (percent/amount on what remains).
    */
-  Core.applyPromotions = function (lines, promos, now) {
+  Core.applyPromotions = function (lines, promos, now, coupon) {
     const act = (promos || []).filter((p) => Core.promoActive(p, now));
     const L = lines.map((l) => {
       const gross = r2(l.qty * l.price);
@@ -249,7 +249,9 @@
       else if (d > bestInv.d) bestInv = { d, name: p.name };
     });
     if (bestInv.name) { invD = r2(invD + bestInv.d); invNames.push(bestInv.name); }
-    return { lines: L, subtotal, invoicePromoDisc: Math.min(subtotal, invD), invoicePromoNames: invNames };
+    let couponDisc = 0;
+    if (coupon) { couponDisc = Core.couponAmount(coupon, r2(subtotal - Math.min(subtotal, invD))); if (couponDisc > 0) { invD = r2(invD + couponDisc); invNames.push('Coupon ' + coupon.code); } }
+    return { lines: L, subtotal, invoicePromoDisc: Math.min(subtotal, invD), invoicePromoNames: invNames, couponDisc };
   };
 
   /**
@@ -257,7 +259,7 @@
    * Allocates invoice-level discounts proportionally to lines, computes tax per line.
    */
   Core.computeCart = function (cart, promos, settings, now) {
-    const pr = Core.applyPromotions(cart.lines, promos, now);
+    const pr = Core.applyPromotions(cart.lines, promos, now, cart.coupon);
     const subtotal = pr.subtotal;
     const manualInv = r2(Math.min(subtotal, (cart.invAmt || 0) + subtotal * (cart.invPct || 0) / 100));
     const redeem = r2(Math.min(Math.max(0, subtotal - manualInv - pr.invoicePromoDisc), cart.redeemValue || 0));
@@ -282,7 +284,7 @@
     return {
       lines, gross: r2(lines.reduce((s, l) => s + l.gross, 0)),
       lineDisc: r2(lines.reduce((s, l) => s + l.promoDisc + l.manualDisc, 0)),
-      invoiceDisc: invDisc, redeemValue: redeem, invoicePromoNames: pr.invoicePromoNames,
+      invoiceDisc: invDisc, redeemValue: redeem, invoicePromoNames: pr.invoicePromoNames, couponDisc: pr.couponDisc || 0,
       subtotal, tax, total, net: r2(total - tax),
     };
   };
@@ -328,6 +330,114 @@
     return rec;
   };
 
+  // ---------- coupons ----------
+  /** coupon: {code, kind:'percent'|'amount', value, minTotal}. Amount off a base (the subtotal after item promotions). */
+  Core.couponAmount = function (c, base) {
+    if (!c || !(base > 0)) return 0;
+    if (c.minTotal && base < c.minTotal) return 0;
+    const d = c.kind === 'percent' ? base * Math.min(100, c.value || 0) / 100 : (c.value || 0);
+    return r2(Math.min(base, d));
+  };
+  Core.findCoupon = function (db, code) { const k = String(code || '').trim().toUpperCase(); return (db.coupons || []).find((x) => x.code === k); };
+  Core.couponUses = function (db, code, customerId) {
+    let all = 0, mine = 0;
+    db.sales.forEach((x) => { if (x.type === 'sale' && x.status !== 'voided' && x.coupon && x.coupon.code === code) { all++; if (customerId && x.customerId === customerId) mine++; } });
+    return { all, mine };
+  };
+  /** Throws a code when the coupon cannot be used now. Returns the coupon. */
+  Core.checkCoupon = function (db, code, ctx, now) {
+    ctx = ctx || {};
+    const c = Core.findCoupon(db, code);
+    if (!c) throw new Error('COUPON_MISSING');
+    if (c.active === false) throw new Error('COUPON_INACTIVE');
+    const d = Core.today(now || new Date());
+    if (c.startDate && d < c.startDate) throw new Error('COUPON_NOT_STARTED');
+    if (c.endDate && d > c.endDate) throw new Error('COUPON_EXPIRED');
+    const u = Core.couponUses(db, c.code, ctx.customerId);
+    if (c.maxUses > 0 && u.all >= c.maxUses) throw new Error('COUPON_USED_UP');
+    if (c.maxPerCustomer > 0) { if (!ctx.customerId) throw new Error('COUPON_NEEDS_CUSTOMER'); if (u.mine >= c.maxPerCustomer) throw new Error('COUPON_CUSTOMER_LIMIT'); }
+    if (c.minTotal && ctx.subtotal != null && ctx.subtotal < c.minTotal) { const e = new Error('COUPON_MIN_TOTAL'); e.min = c.minTotal; throw e; }
+    return c;
+  };
+  Core.saveCoupon = function (db, input) {
+    const code = String(input.code || '').trim().toUpperCase().replace(/\s+/g, '');
+    if (!/^[A-Z0-9_-]{3,20}$/.test(code)) throw new Error('COUPON_BAD_CODE');
+    if (input.kind !== 'percent' && input.kind !== 'amount') throw new Error('COUPON_BAD_KIND');
+    const v = Number(input.value); if (!(v > 0) || (input.kind === 'percent' && v > 100)) throw new Error('COUPON_BAD_VALUE');
+    if (input.startDate && input.endDate && input.endDate < input.startDate) throw new Error('COUPON_BAD_DATES');
+    db.coupons = db.coupons || [];
+    let c = db.coupons.find((x) => x.code === code);
+    if (c && c.id !== input.id) throw new Error('COUPON_EXISTS');
+    if (!c) { c = { id: Core.uid('cpn'), code, used: 0 }; db.coupons.push(c); }
+    Object.assign(c, { code, kind: input.kind, value: r2(v), startDate: input.startDate || '', endDate: input.endDate || '', maxUses: Math.max(0, Math.floor(Number(input.maxUses) || 0)), maxPerCustomer: Math.max(0, Math.floor(Number(input.maxPerCustomer) || 0)), minTotal: Math.max(0, Number(input.minTotal) || 0), active: input.active !== false, note: input.note || '' });
+    return c;
+  };
+
+  // ---------- gift cards ----------
+  // A gift card sale is NOT revenue: it is money held for the customer (a liability). Revenue happens when the card is used to pay a sale.
+  Core.findGiftCard = function (db, no) { const k = String(no || '').trim().toUpperCase(); return (db.giftCards || []).find((x) => x.no === k); };
+  Core.checkGiftCard = function (db, no, now) {
+    const g = Core.findGiftCard(db, no);
+    if (!g) throw new Error('GIFT_MISSING');
+    if (g.status === 'void') throw new Error('GIFT_VOID');
+    if (g.expiresOn && Core.today(now || new Date()) > g.expiresOn) throw new Error('GIFT_EXPIRED');
+    if (!(g.balance > 0.004)) throw new Error('GIFT_EMPTY');
+    return g;
+  };
+  Core.giftLog = function (g, kind, amount, ref, now) { g.log = g.log || []; g.log.push({ ts: (now || new Date()).toISOString(), kind, amount: r2(amount), ref: ref || '', balance: g.balance }); };
+  /** input: {amount, no?(pre-printed card number), expiresOn?, expiresDays?, payments:[{method:'cash'|'card'|'other',amount}], user, shiftId, customerName?} */
+  Core.sellGiftCard = function (db, input, now) {
+    now = now || new Date();
+    const amount = r2(Number(input.amount));
+    if (!(amount > 0)) throw new Error('GIFT_BAD_AMOUNT');
+    if (input.shiftId) { const sh = db.shifts.find((x) => x.id === input.shiftId); if (!sh || sh.closedAt) throw new Error('SHIFT_CLOSED'); }
+    const pays = (input.payments || []).filter((p) => p.amount > 0);
+    if (pays.some((p) => p.method === 'gift' || p.method === 'credit')) throw new Error('GIFT_PAY_WITH_CREDIT');
+    pays.forEach((p) => { if (!Number.isFinite(p.amount)) throw new Error('BAD_PAYMENT'); });
+    const paid = r2(pays.reduce((t, p) => t + p.amount, 0)), cash = r2(pays.filter((p) => p.method === 'cash').reduce((t, p) => t + p.amount, 0));
+    if (paid + 0.004 < amount) throw new Error('UNDERPAID');
+    const change = r2(Math.max(0, paid - amount));
+    if (r2(paid - cash) > amount + 0.004) throw new Error('NONCASH_OVER');
+    if (change > cash + 0.004) throw new Error('CHANGE_EXCEEDS_CASH');
+    db.giftCards = db.giftCards || [];
+    let no = String(input.no || '').trim().toUpperCase();
+    if (no) { if (!/^[A-Z0-9-]{4,24}$/.test(no)) throw new Error('GIFT_BAD_NO'); if (Core.findGiftCard(db, no)) throw new Error('GIFT_EXISTS'); }
+    else { do { db.counters.gift = (db.counters.gift || 0) + 1; no = 'GC' + String(db.counters.gift).padStart(5, '0') + String(Math.floor(Math.random() * 9000) + 1000); } while (Core.findGiftCard(db, no)); }
+    const issued = Core.today(now);
+    const expiresOn = input.expiresOn != null && input.expiresOn !== '' ? input.expiresOn : (input.expiresDays > 0 ? Core.addDays(issued, input.expiresDays) : '');
+    if (expiresOn && expiresOn <= issued) throw new Error('GIFT_BAD_EXPIRY');
+    const sale = { id: Core.uid('gsale'), no: Core.newInvoiceNo(db, 'sale'), ts: now.toISOString(), type: 'giftsale', userId: input.user.id, userName: input.user.name, shiftId: input.shiftId || null,
+      customerName: input.customerName || '', lines: [], gross: amount, lineDisc: 0, invoiceDisc: 0, subtotal: amount, tax: 0, total: amount, cogs: 0, payments: pays, paid, change, giftCardNo: no, status: 'completed', returned: {} };
+    const g = { id: Core.uid('gc'), no, initial: amount, balance: amount, issuedOn: issued, expiresOn, status: 'active', soldIn: sale.no, soldSaleId: sale.id, customerName: input.customerName || '', log: [] };
+    Core.giftLog(g, 'issue', amount, sale.no, now);
+    db.giftCards.push(g); db.sales.push(sale);
+    return { card: g, sale };
+  };
+  /** Cancel a card sold by mistake. Only an unused card: the money goes back like a voided sale. */
+  Core.voidGiftCard = function (db, no, user, reason) {
+    if (!Core.can(db, user, 'voidGiftCard')) throw new Error('MANAGER_ONLY');
+    const g = Core.findGiftCard(db, no);
+    if (!g) throw new Error('GIFT_MISSING');
+    if (g.status === 'void') throw new Error('GIFT_VOID');
+    if (r2(g.balance) !== r2(g.initial) || g.log.length > 1) throw new Error('GIFT_ALREADY_USED');
+    const sale = db.sales.find((x) => x.id === g.soldSaleId);
+    if (sale) { const sh = sale.shiftId && db.shifts.find((x) => x.id === sale.shiftId); if (sh && sh.closedAt) throw new Error('VOID_CLOSED_SHIFT'); Core.touchSale(db, sale); sale.status = 'voided'; sale.voidReason = reason || ''; sale.voidBy = user.name; }
+    g.status = 'void'; g.balance = 0; Core.giftLog(g, 'void', g.initial, reason || '');
+    return g;
+  };
+  /** manager tool: move the expiry date */
+  Core.extendGiftCard = function (db, no, user, newDate) {
+    if (!Core.can(db, user, 'voidGiftCard')) throw new Error('MANAGER_ONLY');
+    const g = Core.findGiftCard(db, no); if (!g) throw new Error('GIFT_MISSING'); if (g.status === 'void') throw new Error('GIFT_VOID');
+    g.expiresOn = newDate || ''; Core.giftLog(g, 'expiry', 0, newDate || '');
+    return g;
+  };
+  Core.giftLiability = function (db, now) {
+    const today = Core.today(now || new Date()); let open = 0, expired = 0, count = 0;
+    (db.giftCards || []).forEach((g) => { if (g.status === 'void' || !(g.balance > 0)) return; if (g.expiresOn && today > g.expiresOn) expired = r2(expired + g.balance); else { open = r2(open + g.balance); count++; } });
+    return { open, expired, count };
+  };
+
   // ---------- sales ----------
   Core.newInvoiceNo = function (db, kind) {
     const k = kind === 'return' ? 'ret' : kind;
@@ -349,12 +459,21 @@
     cart.lines.forEach((l) => { if (!Number.isFinite(l.qty) || !(l.qty > 0)) throw new Error('BAD_QTY'); if (!Number.isFinite(l.price) || l.price < 0) throw new Error('BAD_PRICE'); });
     (input.payments || []).forEach((p) => { if (!Number.isFinite(p.amount) || p.amount < 0) throw new Error('BAD_PAYMENT'); });
     if (input.shiftId) { const sh = db.shifts.find((x) => x.id === input.shiftId); if (!sh || sh.closedAt) throw new Error('SHIFT_CLOSED'); }
-    const calc = Core.computeCart(cart, db.promos, s, now);
-    let xr = null, credit = 0;
+    let cpn = null;
+    if (cart.coupon) { cpn = Core.checkCoupon(db, cart.coupon.code, { customerId: input.customerId }, now); }
+    const calc = Core.computeCart(cpn ? Object.assign({}, cart, { coupon: cpn }) : cart, db.promos, s, now);
+    if (cpn && !(calc.couponDisc > 0)) { const e = new Error('COUPON_MIN_TOTAL'); e.min = cpn.minTotal; throw e; }
+    let xr = null, credit = 0, gift = null, giftAmt = 0;
+    input = Object.assign({}, input, { payments: (input.payments || []).filter((p) => p.method !== 'gift') });
     if (input.exchangeReceiptNo) {
       xr = Core.checkExchangeReceipt(db, input.exchangeReceiptNo, now);
       credit = r2(Math.min(xr.amount, calc.total));
       input = Object.assign({}, input, { payments: (input.payments || []).filter((p) => p.method !== 'credit').concat(credit > 0 ? [{ method: 'credit', amount: credit }] : []) });
+    }
+    if (input.giftCardNo) {
+      gift = Core.checkGiftCard(db, input.giftCardNo, now);
+      giftAmt = r2(Math.min(gift.balance, r2(calc.total - credit), input.giftAmount > 0 ? input.giftAmount : Infinity));
+      if (giftAmt > 0) input = Object.assign({}, input, { payments: input.payments.concat([{ method: 'gift', amount: giftAmt }]) });
     }
     const paid = r2((input.payments || []).reduce((t, p) => t + (p.amount || 0), 0));
     const cash = r2((input.payments || []).filter((p) => p.method === 'cash').reduce((t, p) => t + p.amount, 0));
@@ -411,6 +530,8 @@
       });
     });
     sale.cogs = cogs;
+    if (cpn) { sale.coupon = { code: cpn.code, amount: calc.couponDisc }; cpn.used = (cpn.used || 0) + 1; }
+    if (gift && giftAmt > 0) { gift.balance = r2(gift.balance - giftAmt); sale.giftCard = { no: gift.no, amount: giftAmt }; Core.giftLog(gift, 'redeem', giftAmt, sale.no, now); }
     // loyalty
     if (s.loyaltyEnabled && input.customerId) {
       const c = db.customers.find((x) => x.id === input.customerId);
@@ -512,6 +633,12 @@
       const c = db.customers.find((x) => x.id === sale.customerId);
       if (c) c.points = r2(Math.max(0, (c.points || 0) - Math.floor(refund / (db.settings.loyaltyEarnPerCurrency || 10))));
     }
+    if (method !== 'credit' && sale.giftCard && refund > 0) { // the part that was paid with a gift card goes back onto that card, the rest is cash
+      const g = Core.findGiftCard(db, sale.giftCard.no);
+      const left = r2(sale.giftCard.amount - (sale.giftRefunded || 0));
+      const part = g && g.status !== 'void' ? Math.min(left, r2(refund * sale.giftCard.amount / sale.total), refund) : 0;
+      if (part > 0) { g.balance = r2(g.balance + part); Core.giftLog(g, 'refund', part, ret.no, now); sale.giftRefunded = r2((sale.giftRefunded || 0) + part); ret.giftRefund = part; ret.giftCardNo = g.no; Core.touchSale(db, sale); }
+    }
     if (method === 'credit') {
       const rec = Core.issueExchangeReceipt(db, refund, { returnNo: ret.no, saleNo: sale.no, customerName: sale.customerName || '' }, now);
       ret.exchangeReceiptNo = rec.no;
@@ -546,6 +673,8 @@
         used.status = 'open'; delete used.redeemedIn; delete used.redeemedOn;
       }
     }
+    if (sale.giftCard) { const g = Core.findGiftCard(db, sale.giftCard.no); if (g) { g.balance = r2(g.balance + sale.giftCard.amount - (sale.giftRefunded || 0)); Core.giftLog(g, 'void-restore', sale.giftCard.amount, sale.no); } }
+    if (sale.coupon) { const c = Core.findCoupon(db, sale.coupon.code); if (c && c.used > 0) c.used--; }
     if (db.settings.loyaltyEnabled && sale.customerId) { // a void takes back earned points and gives back redeemed ones
       const c = db.customers.find((x) => x.id === sale.customerId);
       if (c) c.points = r2(Math.max(0, (c.points || 0) - (sale.pointsEarned || 0) + (sale.redeemValue || 0) / (db.settings.loyaltyPointValue || 1)));
@@ -565,6 +694,7 @@
     if (!sale || sale.type !== 'sale') return ['NOT_A_SALE'];
     if (sale.status === 'voided') r.push('VOIDED');
     if (Object.keys(sale.returned || {}).length) r.push('EDIT_HAS_RETURNS');
+    if (sale.giftCard) r.push('EDIT_HAS_GIFT');
     if (sale.exchangeCredit || sale.newExchangeReceipt || (db.exchangeReceipts || []).some((x) => x.saleNo === sale.no || x.redeemedIn === sale.no)) r.push('EDIT_HAS_EXCHANGE');
     return r;
   };
@@ -680,17 +810,18 @@
     const view = (x) => (x.closedShiftView && shift.closedAt ? Object.assign({}, x, x.closedShiftView) : x); // a closed shift keeps the numbers it was closed with
     const sales = rows.filter((x) => x.type === 'sale').map(view);
     const rets = rows.filter((x) => x.type === 'return');
+    const gsales = rows.filter((x) => x.type === 'giftsale');
     const byMethod = {};
-    sales.forEach((s) => s.payments.forEach((p) => { byMethod[p.method] = r2((byMethod[p.method] || 0) + p.amount); }));
-    const changeGiven = r2(sales.reduce((t, s) => t + s.change, 0));
+    sales.concat(gsales).forEach((s) => s.payments.forEach((p) => { byMethod[p.method] = r2((byMethod[p.method] || 0) + p.amount); }));
+    const changeGiven = r2(sales.concat(gsales).reduce((t, s) => t + s.change, 0));
     byMethod.cash = r2((byMethod.cash || 0) - changeGiven);
     const refunds = {};
-    rets.forEach((r) => { refunds[r.method] = r2((refunds[r.method] || 0) + r.refund); });
+    rets.forEach((r) => { refunds[r.method] = r2((refunds[r.method] || 0) + r.refund - (r.giftRefund || 0)); if (r.giftRefund) refunds.gift = r2((refunds.gift || 0) + r.giftRefund); });
     const cashIn = r2(shift.moves.filter((m) => m.kind === 'in').reduce((t, m) => t + m.amount, 0));
     const cashOut = r2(shift.moves.filter((m) => m.kind === 'out').reduce((t, m) => t + m.amount, 0));
     const expectedCash = r2(shift.openingCash + (byMethod.cash || 0) - (refunds.cash || 0) + cashIn - cashOut);
     return { salesCount: sales.length, returnsCount: rets.length, salesTotal: r2(sales.reduce((t, s) => t + s.total, 0)),
-      returnsTotal: r2(rets.reduce((t, r) => t + r.refund, 0)), byMethod, refunds, cashIn, cashOut, expectedCash };
+      returnsTotal: r2(rets.reduce((t, r) => t + r.refund, 0)), giftSoldCount: gsales.length, giftSoldTotal: r2(gsales.reduce((t, g) => t + g.total, 0)), byMethod, refunds, cashIn, cashOut, expectedCash };
   };
   /** opts.blind: the closer may not see the expected cash. The count is saved, the shift is locked (no more sales), and the close waits for an approver. */
   Core.closeShift = function (db, shift, countedCash, note, opts) {

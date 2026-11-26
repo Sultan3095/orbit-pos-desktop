@@ -224,6 +224,26 @@ app.whenReady().then(async () => {
     check('receipt printed through the raster path (arabic as image) without cut error', fakeJobs.length === nb + 1 && ESC.decode(fakeJobs[nb]).some((x) => x.t === 'raster'));
     await ev(`App.db.settings.printer.type='system'; return 1`);
     fake.close();
+    // 10d. gift cards + coupons through the real screens
+    await click('[data-nav=coupons]'); await sleep(300); await click('#cp-add'); await sleep(200);
+    await setv('[name=code]', 'EID10'); await setv('[name=value]', 10); await shot('50-coupon-form'); await modalBtn(1); await sleep(300);
+    check('coupon saved from the screen', await ev(`return !!Core.findCoupon(App.db,'EID10')`)); await shot('51-coupons-list');
+    await click('[data-nav=gifts]'); await sleep(300); await click('#g-sell'); await sleep(200);
+    await setv('[name=amount]', 200); await setv('[name=customer]', 'Mona'); await shot('52-gift-sell-form'); await modalBtn(1); await sleep(400);
+    check('gift card sold from the screen, balance 200', await ev(`const g=App.db.giftCards[0]; return !!g && g.balance===200 && g.initial===200`)); await shot('53-gift-sold');
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(150); await shot('54-gifts-list');
+    await ev(`window.__gno=App.db.giftCards[0].no; return 1`);
+    await click('[data-nav=sell]'); await sleep(300);
+    await ev(`await Sell.submitQuery('6222'); await Sell.submitQuery('6222'); return 1`);
+    await click('[data-cart=coupon]'); await sleep(200); await setv('#cp-code', 'EID10'); await shot('55-coupon-entry'); await modalBtn(2); await sleep(300);
+    check('coupon applied in the cart', await ev(`return App.cart.couponCode==='EID10' && Sell.calc().couponDisc>0`)); await shot('56-cart-with-coupon');
+    await click('[data-cart=pay]'); await sleep(250); await setv('[name=gc]', await ev(`return window.__gno`)); await setv('[name=gca]', 500); await sleep(150); await shot('57-pay-with-gift-card');
+    await modalBtn(1); await sleep(500);
+    const gsale = await ev(`const s=App.db.sales.filter(x=>x.type!=='giftsale').slice(-1)[0]; return {gift:s.giftCard,cp:s.coupon,bal:App.db.giftCards[0].balance,total:s.total}`);
+    check('sale paid by gift card with coupon: balance reduced, coupon recorded', !!gsale.gift && !!gsale.cp && gsale.cp.code === 'EID10' && Math.abs(gsale.bal - (200 - gsale.gift.amount)) < 0.01 && Math.abs(gsale.gift.amount - gsale.total) < 0.01, JSON.stringify(gsale));
+    await shot('58-gift-sale-done'); await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(200);
+    await click('[data-nav=gifts]'); await sleep(300); await click('[data-gh]'); await sleep(200); await shot('59-gift-history');
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(200);
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
     const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);
