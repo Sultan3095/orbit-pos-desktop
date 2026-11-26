@@ -228,9 +228,11 @@ function giftWriteOffModal(g, done) {
     const v = readForm(w, f); try { Core.giftWriteOff(App.db, g.no, App.user, v.reason); await save(true); done(); } catch (e) { toast(errMsg(e), 'err'); return false; } } }], enter: 1 });
 }
 function giftPrintModal(done) {
-  const f = [{ k: 'value', label: t('giftAmount'), type: 'number', step: 'any', first: true }, { k: 'qty', label: t('giftQty'), type: 'number' }];
-  modal({ title: t('giftPrintCards'), body: '<div class="grid2">' + form(f, { qty: 10 }) + '</div><p class="muted sm">' + t('giftPrintHelp') + '</p>', buttons: [{ label: t('cancel') }, { label: '🖨 ' + t('print'), cls: 'primary', onClick: async (w) => {
-    const v = readForm(w, f); try { const rows = Core.giftPrintBatch(App.db, v.value, v.qty); await save(true); printGiftCards(rows); done(); } catch (e) { toast(errMsg(e), 'err'); return false; } } }], enter: 1 });
+  const f = [{ k: 'value', label: t('giftAmount'), type: 'number', step: 'any', first: true }, { k: 'qty', label: t('giftQty'), type: 'number' }, { k: 'cropMarks', type: 'check', label: '', hint: t('gpCrop') }, { k: 'dataOnly', type: 'check', label: '', hint: t('gpDataOnly') }];
+  const go = (pdf) => async (w) => {
+    const v = readForm(w, f); try { const rows = Core.giftPrintBatch(App.db, v.value, v.qty); await save(true); printGiftCards(rows, { cropMarks: v.cropMarks, dataOnly: v.dataOnly, pdf }); done(); } catch (e) { toast(errMsg(e), 'err'); return false; } };
+  modal({ title: t('giftPrintCards'), body: '<div class="grid2">' + form(f, { qty: 10, cropMarks: true }) + '</div><p class="muted sm">' + t('giftPrintHelp') + '</p><p><button class="btn" id="gp-design" type="button">🎨 ' + t('gdTitle') + '</button></p>', buttons: [{ label: t('cancel') }, { label: '📄 ' + t('gpPdf'), onClick: go(true) }, { label: '🖨 ' + t('print'), cls: 'primary', onClick: go(false) }], enter: 2,
+    onOpen: (w) => { $('#gp-design', w).onclick = () => giftDesignModal(); } });
 }
 function giftHistoryModal(g) {
   const kinds = { issue: sb('إصدار', 'Issued'), redeem: sb('استخدام', 'Used'), refund: sb('مرتجع على الكارت', 'Refunded to card'), 'void-restore': sb('إلغاء فاتورة (رجوع الرصيد)', 'Invoice voided (balance back)'), void: sb('إلغاء الكارت', 'Card cancelled'), expiry: sb('تغيير الانتهاء', 'Expiry changed') };
@@ -419,7 +421,7 @@ Views.settings = function (m) {
   ];
   const vals = Object.assign({}, s, { receiptWidth: String(s.receiptWidth), accent: s.accent || '#2563eb' });
   m.innerHTML = head(t('nav_settings'), '<button class="btn primary" id="st-save">' + t('save') + '</button>') + F.map((g) => '<div class="card"><h3>' + t('sg_' + g[0]) + '</h3><div class="grid3">' + form(g[1], vals) + '</div></div>').join('') +
-    (can('settings') ? healthCardHTML() : '') + (can('settings') ? printerCardHTML() : '') + (can('settings') ? '<div class="card" id="perm-card"><h3>🔑 ' + t('permMatrix') + '</h3><p class="muted">Y = ' + sb('مسموح', 'allowed') + ' · A = ' + sb('بموافقة مدير', 'needs approval') + ' · N = ' + sb('ممنوع', 'denied') + '</p>' + permMatrixHTML() + '</div><div class="card"><h3>' + t('editLog') + '</h3>' + editLogHTML() + '</div>' : '') +
+    (can('settings') ? healthCardHTML() : '') + (can('settings') ? printerCardHTML() : '') + (can('settings') ? '<div class="card"><h3>🎁 ' + t('gdTitle') + '</h3><p class="muted sm">' + t('gdHelp') + '</p><button class="btn" id="st-gdesign">🎨 ' + t('gdTitle') + '</button></div>' : '') + (can('settings') ? '<div class="card" id="perm-card"><h3>🔑 ' + t('permMatrix') + '</h3><p class="muted">Y = ' + sb('مسموح', 'allowed') + ' · A = ' + sb('بموافقة مدير', 'needs approval') + ' · N = ' + sb('ممنوع', 'denied') + '</p>' + permMatrixHTML() + '</div><div class="card"><h3>' + t('editLog') + '</h3>' + editLogHTML() + '</div>' : '') +
     '<div class="card"><h3>' + t('users') + '</h3><div id="ulist"></div><button class="btn" id="u-add">+ ' + t('addUser') + '</button></div>' +
     '<div class="card" id="sec-card"><h3>🔐 ' + sb('حماية البيانات', 'Data protection') + '</h3><p class="muted" id="sec-state"></p><div class="row"><button class="btn" id="sec-mode"></button><button class="btn" id="sec-change">' + sb('تغيير كلمة السر', 'Change passphrase') + '</button></div></div>' +
     '<div class="card"><h3>' + t('backup') + '</h3><p class="muted">' + t('backupInfo') + '</p><div class="row"><button class="btn" id="b-now">💾 ' + t('backupNow') + '</button><button class="btn" id="b-res">♻ ' + t('restore') + '</button><button class="btn" id="b-dir">📁 ' + t('chooseFolder') + '</button><span class="muted">' + esc(s.backupDir || t('defaultFolder')) + '</span></div><div class="muted sm" id="dpath"></div></div>';
@@ -447,6 +449,7 @@ Views.settings = function (m) {
     }
     if (e.target.id === 'u-add') userModal(null, () => drawUsers()); const ue = e.target.closest('[data-ue]'); if (ue) userModal(App.db.users.find((x) => x.id === ue.dataset.ue), () => drawUsers());
     if (e.target.id === 'b-now') { await save(true); const p = await window.api.backupNow(); toast(p ? t('backupSaved') + ': ' + p : t('saveFail'), p ? '' : 'err'); }
+    if (e.target.id === 'st-gdesign') return giftDesignModal();
     if (e.target.id === 'b-dir') { const d = await window.api.chooseDir(); if (d) { s.backupDir = d; await save(true); Views.settings(m); } }
     if (e.target.id === 'b-res') { if (!await confirmBox(t('restoreQ'))) return; try {
       const f = await window.api.pickBackup(); if (!f) return; let secret = '';

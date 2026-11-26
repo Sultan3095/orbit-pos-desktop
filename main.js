@@ -94,6 +94,14 @@ ipcMain.handle('print:html', async (_e, html, opts) => {
   opts = opts || {};
   const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
   await w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  if (opts.pdf) {
+    try {
+      const data = await w.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+      let file = opts.pdfPath;
+      if (!file) { const r = await dialog.showSaveDialog(win, { defaultPath: 'orbit-gift-cards.pdf', filters: [{ name: 'PDF', extensions: ['pdf'] }] }); if (r.canceled || !r.filePath) { w.close(); return { ok: false, reason: 'cancelled' }; } file = r.filePath; }
+      fs.writeFileSync(file, data); w.close(); return { ok: true, path: file, bytes: data.length, head: data.slice(0, 5).toString('latin1') };
+    } catch (e) { w.close(); return { ok: false, reason: String(e && e.message || e) }; }
+  }
   return new Promise((resolve) => {
     w.webContents.print({ silent: !!opts.silent, printBackground: true, margins: { marginType: 'none' } }, (ok, reason) => { w.close(); resolve({ ok, reason }); });
   });

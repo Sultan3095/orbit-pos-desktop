@@ -486,33 +486,62 @@ function qrSvg(text, px) {
     for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += '<rect x="' + c + '" y="' + r + '" width="1.02" height="1.02"/>';
     return '<svg xmlns="http://www.w3.org/2000/svg" width="' + px + '" height="' + px + '" viewBox="0 0 ' + n + ' ' + n + '" fill="#12284C" shape-rendering="crispEdges">' + d + '</svg>'; } catch (e) { return ''; }
 }
-function giftCardFrontHTML(row, store) {
-  const acc = row.value >= 1000 ? '#1BA39C' : '#F2A93B'; const no = row.no;
+const GIFT_TERMS_AR = 'البطاقة لحاملها وتُستخدم كوسيلة دفع على المشتريات من المحل.\nلا تُستبدل بنقد. الرصيد المتبقي يبقى على البطاقة.\nالاحتفاظ بالبطاقة مسؤولية حاملها.';
+const GIFT_TERMS_EN = 'Redeemable in store as a payment method. Not exchangeable for cash. Remaining balance stays on the card.';
+function giftDesign() {
+  const d = Object.assign({ clientName: '', clientLogo: '', c1: '#12284C', c2: '#1BA39C', accent: '#F2A93B', termsAr: GIFT_TERMS_AR, termsEn: GIFT_TERMS_EN }, App.db.settings.giftDesign || {});
+  d.clientName = d.clientName || App.db.settings.storeName || ''; return d;
+}
+const ORBIT_MARK = '<svg width="70" height="70" viewBox="0 0 120 120"><circle cx="60" cy="60" r="22" fill="#fff"/><ellipse cx="60" cy="60" rx="52" ry="22" fill="none" stroke="#1BA39C" stroke-width="7" transform="rotate(-25 60 60)"/><circle cx="104" cy="40" r="9" fill="#F2A93B"/></svg>';
+function giftCardFrontHTML(row, d, o) {
+  o = o || {}; const no = row.no; const plain = !!o.dataOnly;
   let bars = ''; try { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); JsBarcode(svg, no, { format: 'CODE128', height: 40, width: 2, displayValue: false, margin: 0 }); bars = svg.outerHTML; } catch (e) { bars = ''; }
-  const mark = '<svg width="70" height="70" viewBox="0 0 120 120"><circle cx="60" cy="60" r="22" fill="#fff"/><ellipse cx="60" cy="60" rx="52" ry="22" fill="none" stroke="#1BA39C" stroke-width="7" transform="rotate(-25 60 60)"/><circle cx="104" cy="40" r="9" fill="#F2A93B"/></svg>';
-  return '<div class="gcell"><div class="gcard" style="background:linear-gradient(135deg,#12284C,#0d1d38);color:#fff"><div class="gtop"><div class="gbrand">' + mark + '<b>ORBIT</b></div><div class="ggc">بطاقة هدية<br><span>GIFT CARD</span></div></div>' +
-    '<div class="gval" style="color:' + acc + '">' + money(row.value) + '<small> ' + esc(App.db.settings.currency || '') + '</small></div>' +
-    '<div class="gmid"><div class="gqr">' + qrSvg(no, 110) + '</div><div><div class="glab">رقم البطاقة · Card No.</div><div class="gno">' + esc(no) + '</div><div class="gbar">' + bars.replace('<svg ', '<svg style="width:280px;height:42px" preserveAspectRatio="none" ') + '</div></div></div><div class="gfoot">' + esc(store) + '</div></div></div>';
+  const logo = d.clientLogo ? '<img class="glogo" src="' + esc(d.clientLogo) + '">' : '';
+  const top = plain ? '' : '<div class="gtop"><div class="gbrand gfixed">' + ORBIT_MARK + '<b>ORBIT</b></div><div class="gclient">' + logo + '<span>' + esc(d.clientName) + '</span></div></div><div class="gkind">بطاقة هدية · GIFT CARD</div>';
+  const style = plain ? 'background:none;color:#000' : 'background:linear-gradient(135deg,' + d.c1 + ',' + d.c1 + 'e6);color:#fff';
+  return '<div class="gcell' + (plain ? ' plain' : '') + '"><div class="gcard" data-kind="front" style="' + style + '">' + top +
+    '<div class="gval" style="color:' + (plain ? '#000' : d.accent) + (plain ? ';padding-top:150px' : '') + '">' + money(row.value) + '<small> ' + esc(App.db.settings.currency || '') + '</small></div>' +
+    '<div class="gmid"><div class="gqr">' + qrSvg(no, 110) + '</div><div><div class="glab">' + (plain ? '' : 'رقم البطاقة · Card No.') + '</div><div class="gno">' + esc(no) + '</div><div class="gbar">' + bars.replace('<svg ', '<svg style="width:280px;height:42px" preserveAspectRatio="none" ') + '</div></div></div>' +
+    (plain ? '' : '<div class="gfoot">' + esc(d.clientName) + ' · Orbit POS</div>') + '</div></div>';
 }
-function giftCardBackHTML(store) {
-  return '<div class="gcell"><div class="gcard" style="background:#F1F5F9;color:#12284C"><div style="height:70px;background:#12284C"></div><div style="direction:rtl;padding:26px 40px;font-size:19px;line-height:1.7"><b style="font-size:23px">الشروط · Terms</b><br>• البطاقة لحاملها وتُستخدم كوسيلة دفع على المشتريات من المحل.<br>• لا تُستبدل بنقد. الرصيد المتبقي يبقى على البطاقة.<br>• الاحتفاظ بالبطاقة مسؤولية حاملها.<br><span dir="ltr" style="display:block;margin-top:6px">• Redeemable in store as a payment method. Not exchangeable for cash. Remaining balance stays on the card.</span></div>' +
-    '<div style="position:absolute;bottom:22px;left:40px;right:40px;font-size:17px;display:flex;justify-content:space-between"><span>' + esc(store) + '</span><span>توقيع / Signature: ____________</span></div></div></div>';
+function giftCardBackHTML(d) {
+  const ar = String(d.termsAr || '').split('\n').filter(Boolean).map((x) => '• ' + esc(x)).join('<br>');
+  return '<div class="gcell"><div class="gcard" data-kind="back" style="background:#F1F5F9;color:' + d.c1 + '"><div style="height:70px;background:' + d.c1 + ';display:flex;align-items:center;justify-content:space-between;padding:0 30px;direction:ltr;color:#fff"><span class="gbrand gfixed" style="font-size:26px;gap:10px">' + ORBIT_MARK.replace('width="70" height="70"', 'width="46" height="46"') + '<b>ORBIT</b></span><span style="font-size:24px">' + esc(d.clientName) + '</span></div>' +
+    '<div style="direction:rtl;padding:26px 40px;font-size:19px;line-height:1.7"><b style="font-size:23px">الشروط · Terms</b><br>' + ar + '<br><span dir="ltr" style="display:block;margin-top:6px">' + esc(d.termsEn || '') + '</span></div>' +
+    '<div style="position:absolute;bottom:22px;left:40px;right:40px;font-size:17px;display:flex;justify-content:space-between"><span>' + esc(d.clientName) + '</span><span>توقيع / Signature: ____________</span></div></div></div>';
 }
-function giftCardsSheetHTML(rows) {
-  const store = App.db.settings.storeName || ''; const pages = []; const per = 8;
+function giftCropMarks(n) {
+  const X0 = 15.4, Y0 = 31, W = 85.6, H = 54, GX = 8, GY = 6, off = 0.6, len = 2.2; let d = '';
+  for (let i = 0; i < n; i++) { const x = X0 + (i % 2) * (W + GX), y = Y0 + Math.floor(i / 2) * (H + GY);
+    [[x, y, -1, -1], [x + W, y, 1, -1], [x, y + H, -1, 1], [x + W, y + H, 1, 1]].forEach((c) => { d += 'M' + (c[0] + c[2] * off) + ' ' + c[1] + 'h' + (c[2] * len) + 'M' + c[0] + ' ' + (c[1] + c[3] * off) + 'v' + (c[3] * len); }); }
+  return '<svg class="gcrop" viewBox="0 0 210 297" xmlns="http://www.w3.org/2000/svg"><path d="' + d + '" stroke="#000" stroke-width=".18" fill="none"/></svg>';
+}
+function giftCardsSheetHTML(rows, o) {
+  o = o || {}; const d = giftDesign(); const pages = []; const per = 8; const marks = o.cropMarks !== false;
   for (let i = 0; i < rows.length; i += per) pages.push(rows.slice(i, i + per));
-  const css = '@page{size:A4;margin:0}*{box-sizing:border-box;margin:0}body{font-family:"Segoe UI","Noto Sans Arabic",Tahoma,Arial,sans-serif}.pg{width:210mm;height:297mm;padding:31mm 15.4mm 0;display:grid;grid-template-columns:85.6mm 85.6mm;grid-auto-rows:54mm;gap:6mm 8mm;page-break-after:always;direction:ltr}.pg.back{direction:rtl}' +
-    '.gcell{width:85.6mm;height:54mm;outline:.2mm dashed #999;outline-offset:.6mm;overflow:hidden;border-radius:3mm}.gcard{zoom:.378;width:856px;height:540px;position:relative;overflow:hidden;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
-    '.gtop{display:flex;justify-content:space-between;padding:36px 44px;direction:ltr;align-items:flex-start}.gbrand{display:flex;align-items:center;gap:14px;font-size:34px;letter-spacing:6px}.ggc{text-align:right;font-size:26px}.ggc span{font-size:16px;letter-spacing:4px;opacity:.7}' +
-    '.gval{font-size:120px;font-weight:800;padding:0 44px;direction:ltr;line-height:1}.gval small{font-size:28px;color:#fff;font-weight:400}.gmid{position:absolute;left:44px;right:44px;bottom:70px;display:flex;gap:26px;align-items:flex-end;direction:ltr}.gqr{background:#fff;padding:8px;border-radius:12px;line-height:0}' +
+  const css = '@page{size:A4;margin:0}*{box-sizing:border-box;margin:0}body{font-family:"Segoe UI","Noto Sans Arabic",Tahoma,Arial,sans-serif}.pg{position:relative;width:210mm;height:297mm;padding:31mm 15.4mm 0;display:grid;grid-template-columns:85.6mm 85.6mm;grid-auto-rows:54mm;gap:6mm 8mm;page-break-after:always;direction:ltr}.pg.back{direction:rtl}.gcrop{position:absolute;left:0;top:0;width:210mm;height:297mm}' +
+    '.gcell{width:85.6mm;height:54mm;overflow:hidden;border-radius:' + (marks ? '0' : '3mm') + '}.gcell.plain{border-radius:0}.gcard{zoom:.378;width:856px;height:540px;position:relative;overflow:hidden;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+    '.gtop{display:flex;justify-content:space-between;padding:30px 44px 0;direction:ltr;align-items:center}.gbrand{display:flex;align-items:center;gap:14px;font-size:34px;letter-spacing:6px}.gclient{display:flex;align-items:center;gap:14px;font-size:30px;font-weight:700;max-width:430px;direction:rtl}.glogo{max-height:70px;max-width:150px;object-fit:contain;background:#fff;border-radius:8px;padding:4px}.gkind{padding:6px 44px 0;font-size:20px;letter-spacing:3px;opacity:.75;direction:ltr}' +
+    '.gval{font-size:120px;font-weight:800;padding:14px 44px 0;direction:ltr;line-height:1}.gval small{font-size:28px;font-weight:400;opacity:.85}.gmid{position:absolute;left:44px;right:44px;bottom:70px;display:flex;gap:26px;align-items:flex-end;direction:ltr}.gqr{background:#fff;padding:8px;border-radius:12px;line-height:0}' +
     '.glab{font-size:17px;opacity:.75;margin-bottom:6px}.gno{font-size:34px;letter-spacing:4px;font-family:"Consolas","DejaVu Sans Mono",monospace;margin-bottom:10px}.gbar{background:#fff;padding:6px 10px;border-radius:8px;display:inline-block;line-height:0}.gfoot{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-size:17px;opacity:.7}';
-  const front = pages.map((p) => '<div class="pg">' + p.map((r) => giftCardFrontHTML(r, store)).join('') + '</div>').join('');
-  const back = '<div class="pg back">' + Array(Math.min(per, rows.length)).fill(giftCardBackHTML(store)).join('') + '</div>';
+  const crop = (n) => marks ? giftCropMarks(n) : '';
+  const front = pages.map((p) => '<div class="pg" data-page="front">' + p.map((r) => giftCardFrontHTML(r, d, o)).join('') + crop(p.length) + '</div>').join('');
+  const back = o.dataOnly ? '' : '<div class="pg back" data-page="back">' + Array(Math.min(per, rows.length)).fill(giftCardBackHTML(d)).join('') + crop(Math.min(per, rows.length)) + '</div>';
   return '<!doctype html><html><head><meta charset="utf-8"><title>Gift cards</title><style>' + css + '</style></head><body>' + front + back + '</body></html>';
 }
-async function printGiftCards(rows) {
-  const html = giftCardsSheetHTML(rows);
-  try { const r = await window.api.print(html, { silent: false }); if (r && !r.ok && r.reason !== 'cancelled' && r.reason !== 'Print job canceled') toast(t('printFail') + ' ' + (r.reason || ''), 'err'); } catch (e) { toast(t('printFail'), 'err'); }
+async function printGiftCards(rows, o) {
+  o = o || {}; const html = giftCardsSheetHTML(rows, o);
+  try { const r = await window.api.print(html, { silent: false, pdf: !!o.pdf, pdfPath: o.pdfPath }); if (r && o.pdf && r.ok) toast(t('giftPdfSaved') + (r.path ? ' ' + r.path : '')); else if (r && !r.ok && r.reason !== 'cancelled' && r.reason !== 'Print job canceled') toast(t('printFail') + ' ' + (r.reason || ''), 'err'); return r; } catch (e) { toast(t('printFail'), 'err'); }
+}
+function resizeLogo(file) {
+  return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => { const im = new Image(); im.onload = () => { const k = Math.min(1, 360 / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/png')); }; im.onerror = () => rej(new Error('BAD_IMAGE')); im.src = fr.result; }; fr.onerror = () => rej(new Error('BAD_IMAGE')); fr.readAsDataURL(file); });
+}
+function giftDesignModal(done) {
+  const d = giftDesign(); const f = [{ k: 'clientName', label: t('gdName'), first: true, wide: true }, { k: 'c1', label: t('gdC1'), type: 'color' }, { k: 'c2', label: t('gdC2'), type: 'color' }, { k: 'accent', label: t('gdAccent'), type: 'color' }, { k: 'termsAr', label: t('gdTermsAr'), type: 'textarea', wide: true }, { k: 'termsEn', label: t('gdTermsEn'), type: 'textarea', wide: true }];
+  let logo = d.clientLogo || '';
+  modal({ title: t('gdTitle'), body: '<p class="muted sm">' + t('gdHelp') + '</p><div class="grid2">' + form(f, d) + '</div><div class="fld wide"><label>' + t('gdLogo') + '</label><input type="file" id="gd-logo" accept="image/png,image/jpeg"> <img id="gd-prev" style="max-height:48px;vertical-align:middle;background:#fff;border-radius:6px;padding:3px;display:' + (logo ? 'inline-block' : 'none') + '" src="' + esc(logo) + '"> <button class="btn" id="gd-nologo" type="button">' + t('gdRemoveLogo') + '</button></div>',
+    buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: async (w) => { const v = readForm(w, f); App.db.settings.giftDesign = Object.assign({}, v, { clientLogo: logo }); await save(true); if (done) done(); } }], enter: 0,
+    onOpen: (w) => { const fi = $('#gd-logo', w); fi.onchange = async () => { try { logo = await resizeLogo(fi.files[0]); const pv = $('#gd-prev', w); pv.src = logo; pv.style.display = 'inline-block'; } catch (e) { toast(t('gdBadImage'), 'err'); } }; $('#gd-nologo', w).onclick = () => { logo = ''; $('#gd-prev', w).style.display = 'none'; }; window.__gdSetLogo = (x) => { logo = x; }; } });
 }
 function giftVoucherHTML(doc, l) {
   const s = App.db.settings; const g = Core.findGiftCard(App.db, doc.giftCardNo) || {}; const rtl = l === 'ar'; const w = s.receiptWidth === 58 ? '54mm' : '76mm'; const m = (n) => money(n, l);
