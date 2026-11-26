@@ -35,6 +35,7 @@ function toast(msg, kind) {
 }
 function errMsg(e) {
   const code = ((e && e.message) || '').match(/[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|\b(?:EMPTY|LOCKED)\b/); const raw = (e && e.message) || ''; const code2 = code ? code[0] : raw; const key = 'err_' + code2; const m = t(key);
+  try { Guide.forError(code2); } catch (x) {}
   return (m === key ? raw : m) + (e.item ? ' (' + e.item + ')' : '') + (e.no ? ' (' + e.no + ')' : '');
 }
 
@@ -206,12 +207,13 @@ function shell() {
   $('#app').innerHTML = '<div class="shell"><aside class="side"><div class="brand">◉ Orbit POS<small>' + esc(App.db.settings.storeName) + '</small></div>' +
     nav.map((n) => '<button class="nav' + (App.view === n[0] ? ' on' : '') + '" data-nav="' + n[0] + '"><span>' + n[1] + '</span> ' + t('nav_' + n[0]) + '</button>').join('') +
     '<div class="grow"></div><div class="who">' + esc(App.user.name) + '<small>' + t(App.user.role) + '</small></div>' +
-    '<div class="row tight"><button class="btn sm" id="b-lang">' + (lang() === 'ar' ? 'EN' : 'ع') + '</button><button class="btn sm" id="b-theme" title="' + t('theme') + '">🎨</button><button class="btn sm" id="b-out">⎋</button></div></aside>' +
+    '<div class="row tight"><button class="btn sm" id="b-lang">' + (lang() === 'ar' ? 'EN' : 'ع') + '</button><button class="btn sm" id="b-theme" title="' + t('theme') + '">🎨</button><button class="btn sm" id="b-guide" title="' + sb('المرشد: شغّال/موقوف', 'Guide: on/off') + '">' + (App.user && App.user.guideOff ? '🙈' : '🧑‍💼') + '</button><button class="btn sm" id="b-out">⎋</button></div></aside>' +
     '<main class="main" id="main"></main></div>';
   $('.side').onclick = (e) => {
     const n = e.target.closest('[data-nav]'); if (n) { App.view = n.dataset.nav; shell(); }
     if (e.target.id === 'b-lang') { App.db.settings.lang = lang() === 'ar' ? 'en' : 'ar'; applyTheme(); save(); shell(); }
     if (e.target.id === 'b-theme') return themePicker();
+    if (e.target.id === 'b-guide') { App.user.guideOff = !App.user.guideOff; if (!App.user.guideOff) Guide.reset(App.user); save(); e.target.textContent = App.user.guideOff ? '🙈' : '🧑‍💼'; toast(sb(App.user.guideOff ? 'المرشد موقوف' : 'المرشد شغّال', App.user.guideOff ? 'Guide off' : 'Guide on')); return; }
     if (e.target.id === 'b-out') { if (App.cart && App.cart.lines.length) holdCart(true); save(true); login(); }
   };
   renderView();
@@ -377,8 +379,8 @@ const Sell = {
     });
   },
   async pay() {
-    if (!App.cart.lines.length) return;
-    if (!App.shift) return openShiftModal();
+    if (!App.cart.lines.length) { if (!(App.user && App.user.guideOff) && !Guide.seen(App.user, 'EMPTY_CART')) { const q = $('#q'); if (q) Guide.show('EMPTY_CART', q); } return; }
+    if (!App.shift) { if (!(App.user && App.user.guideOff) && !Guide.seen(App.user, 'SHIFT_CLOSED')) { const b = $('#s-open'); if (b) { Guide.show('SHIFT_CLOSED', b); return; } } return openShiftModal(); }
     const r = this.calc(); if (r.total < 0) return;
     const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'cref', label: t('cardRef') }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }, { k: 'gc', label: t('giftUseNo') }, { k: 'gca', label: t('giftUseAmt'), type: 'number', step: 'any' }];
     const quick = [r.total, 50, 100, 200, 500].filter((v, i, a) => v > 0 && a.indexOf(v) === i);

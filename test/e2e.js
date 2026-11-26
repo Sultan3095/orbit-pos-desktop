@@ -264,6 +264,24 @@ app.whenReady().then(async () => {
     await click('[data-nav=gifts]'); await sleep(300); await click('#g-print'); await sleep(250); await shot('64-gift-print-form'); await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(150);
     check('printable sheet: real QR and barcode generated from the card number', await ev(`const rows=Core.giftPrintBatch(App.db,500,9); const h=giftCardsSheetHTML(rows); const d=document.createElement('div'); d.id='sheet-prev'; d.style.cssText='position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto;zoom:.5'; const st=h.match(/<style>([\\s\\S]*?)<\\/style>/)[1]; d.innerHTML='<style>'+st.replace(/@page[^}]*}/,'')+'</style>'+h.match(/<body>([\\s\\S]*)<\\/body>/)[1]; document.body.appendChild(d); return d.querySelectorAll('.gqr svg rect').length>100 && d.querySelectorAll('.gbar svg').length===9 && d.textContent.includes(rows[0].no)`)); await shot('65-gift-cards-sheet');
     await ev(`const d=document.getElementById('sheet-prev'); if(d) d.remove(); return 1`); await sleep(150);
+    // 10f. the guide mascot: shows on a mistake, points at the exact control, explains when tapped, dismissible, once per issue
+    await click('[data-nav=sell]'); await sleep(300); await ev(`App.cart=newCart(); Sell.renderCart(); App.user.guideSeen={}; App.user.guideOff=false; return 1`);
+    await click('[data-cart=pay]'); await sleep(400);
+    const gd1 = await ev(`const g=document.querySelector('#guide[data-guide=EMPTY_CART]'); if(!g) return null; const r=document.querySelector('.gring').getBoundingClientRect(), q=document.querySelector('#q').getBoundingClientRect(); const arm=g.querySelector('#g-arm').getAttribute('transform'); return {ringOnTarget: Math.abs(r.left+r.width/2-(q.left+q.width/2))<4 && Math.abs(r.top+r.height/2-(q.top+q.height/2))<4, arm, bub:g.querySelector('.gbub').textContent}`);
+    check('mascot appears on an empty cart and its ring sits on the scan field', !!gd1 && gd1.ringOnTarget && /rotate\(-?[0-9.]+ 84 62\)/.test(gd1.arm), JSON.stringify(gd1)); await shot('70-guide-empty-cart');
+    await click('.gman'); await sleep(200);
+    check('tapping the mascot explains how to fix it', await ev(`return !!document.querySelector('#guide [data-g=long]') && document.querySelector('#guide [data-g=long]').textContent.length>30`)); await shot('71-guide-explain');
+    await click('[data-g=ok]'); await sleep(200);
+    check('dismissed and remembered: gone, and it does not repeat for the same issue', await ev(`const gone=!document.querySelector('#guide'); return gone && App.user.guideSeen.EMPTY_CART===1`));
+    await click('[data-cart=pay]'); await sleep(300); check('once per issue: no second popup', await ev(`return !document.querySelector('#guide')`));
+    await ev(`await Sell.submitQuery('6222'); return 1`); await click('[data-cart=pay]'); await sleep(300); await setv('[name=cash]', 1); await modalBtn(1); await sleep(500);
+    check('under-payment: mascot points at the cash field in the pay window', await ev(`const g=document.querySelector('#guide[data-guide=UNDERPAID]'); if(!g) return false; const r=document.querySelector('.gring').getBoundingClientRect(), c=document.querySelector('.modal-wrap:last-of-type [name=cash]').getBoundingClientRect(); return Math.abs(r.left+r.width/2-(c.left+c.width/2))<4`)); await shot('72-guide-underpaid');
+    await click('[data-g=x]'); await sleep(150); await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); App.cart=newCart(); Sell.renderCart(); return 1`);
+    await click('#b-lang'); await sleep(300); await click('[data-nav=sell]'); await sleep(300); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(400); await shot('73-guide-empty-cart-en');
+    check('English text when the interface is English', await ev(`const g=document.querySelector('#guide'); return !!g && /empty/i.test(g.textContent)`)); await ev(`Guide.close(); return 1`);
+    await click('#b-guide'); await sleep(150); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(300);
+    check('guide can be switched off per user', await ev(`return App.user.guideOff===true && !document.querySelector('#guide')`)); await click('#b-guide'); await sleep(150);
+    await click('#b-lang'); await sleep(300);
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
     const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);
