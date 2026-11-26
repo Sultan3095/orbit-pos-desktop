@@ -72,6 +72,13 @@ const Guide = (function () {
     let key = null; MAP.forEach(([re, k]) => { if (!key && re.test(code)) key = k; }); if (!key || seen(user, key)) return false;
     setTimeout(() => { const el = find(ISSUES[key].sel); if (el) show(key, el); }, 120); return true;
   }
-  return { show, close, forError, seen, ISSUES, current: () => cur, setOff(user, off) { user.guideOff = !!off; if (off) close(); }, reset(user) { user.guideSeen = {}; } };
+  // any other error: the Captain points at the message and explains the next step (known codes use their own card above)
+  function generic(msg) {
+    const user = (typeof App !== 'undefined' && App.user) || null; if (user && user.guideOff) return false;
+    if (cur) return false;
+    ISSUES.ERROR = { sel: ['#toasts .toast:last-child', '#toasts'], short: L(msg, msg), long: L('حصلت مشكلة. اقرا الرسالة اللي ظهرت وصحّح الخانة أو الخطوة المذكورة وجرب تاني. لو اتكررت بلّغ المدير.', 'Something went wrong. Read the message, fix the field or step it names and try again. If it repeats, tell the manager.') };
+    const el = find(ISSUES.ERROR.sel); return el ? show('ERROR', el, 'demo') : false;
+  }
+  return { generic, show, close, forError, seen, ISSUES, current: () => cur, setOff(user, off) { user.guideOff = !!off; if (off) close(); }, reset(user) { user.guideSeen = {}; } };
 })();
 if (typeof module !== 'undefined') module.exports = Guide;

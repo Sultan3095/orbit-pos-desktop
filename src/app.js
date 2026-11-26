@@ -31,7 +31,9 @@ window.addEventListener('beforeunload', () => { if (App.db) { const x = Store.de
 
 function toast(msg, kind) {
   const el = document.createElement('div'); el.className = 'toast ' + (kind || ''); el.textContent = msg;
-  $('#toasts').appendChild(el); setTimeout(() => el.classList.add('hide'), kind === 'err' ? 5000 : 2200); setTimeout(() => el.remove(), 5600);
+  $('#toasts').appendChild(el); setTimeout(() => el.classList.add('hide'), kind === 'err' ? 9000 : 2200); setTimeout(() => el.remove(), kind === 'err' ? 9600 : 5600);
+  // every error gets the Captain; a known code has already queued its own card, so wait a moment and only fill the gap
+  if (kind === 'err') setTimeout(() => { try { Guide.generic(msg); } catch (x) {} }, 350);
 }
 function errMsg(e) {
   const code = ((e && e.message) || '').match(/[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|\b(?:EMPTY|LOCKED)\b/); const raw = (e && e.message) || ''; const code2 = code ? code[0] : raw; const key = 'err_' + code2; const m = t(key);

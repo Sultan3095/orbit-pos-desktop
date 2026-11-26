@@ -296,6 +296,8 @@ app.whenReady().then(async () => {
     check('English text when the interface is English', await ev(`const g=document.querySelector('#guide'); return !!g && /empty/i.test(g.textContent)`)); await ev(`Guide.close(); return 1`);
     await click('#b-guide'); await sleep(150); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(300);
     check('guide can be switched off per user', await ev(`return App.user.guideOff===true && !document.querySelector('#guide')`)); await click('#b-guide'); await sleep(150);
+    await ev(`App.user.guideOff=false; Guide.close(); toast('Printer not reachable','err'); return 1`); await sleep(700);
+    check('any other error: the mascot appears too and points at the message', await ev(`const g=document.querySelector('#guide[data-guide=ERROR]'); return !!g && /Printer not reachable/.test(g.textContent) && !!document.querySelector('.gring')`)); await shot('74-guide-any-error'); await ev(`Guide.close(); return 1`);
     await click('#b-lang'); await sleep(300);
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
