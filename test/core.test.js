@@ -449,3 +449,12 @@ t('coupon plus gift card in one sale', () => {
   const s = C.finalizeSale(x.db, { cart: { lines: [line('a', 'G1', 10, 10)], coupon: { code: 'SAVE10' } }, payments: [], giftCardNo: g.no, user: x.cash, shiftId: x.sh.id });
   assert.strictEqual(s.total, 90); assert.strictEqual(s.giftCard.amount, 90); assert.strictEqual(g.balance, 10);
 });
+
+t('theme: user choice wins, then store setting, then brand; old blue is brand', () => {
+  assert.strictEqual(C.themeOf({ theme: 'light' }, { theme: 'galaxy' }), 'galaxy');
+  assert.strictEqual(C.themeOf({ theme: 'dark' }, {}), 'dark');
+  assert.strictEqual(C.themeOf({}, null), 'brand');
+  assert.strictEqual(C.themeOf({ theme: 'blue' }, null), 'brand');
+  assert.strictEqual(C.themeOf({ theme: 'nonsense' }, { theme: 'x' }), 'brand');
+  assert.strictEqual(C.newDb ? C.newDb().settings.theme : 'brand', 'brand');
+});

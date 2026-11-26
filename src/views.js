@@ -382,7 +382,7 @@ Views.reports = function (m) {
 
 // ---------------- Settings ----------------
 Views.settings = function (m) {
-  const s = App.db.settings; const th = [['light', t('th_light')], ['dark', t('th_dark')], ['blue', t('th_blue')]];
+  const s = App.db.settings; const th = Core.THEMES.map((k) => [k, t('th_' + k)]);
   const F = [
     ['store', [{ k: 'storeName', label: t('storeName') }, { k: 'storeAddress', label: t('address') }, { k: 'storePhone', label: t('phone') }, { k: 'taxNumber', label: t('taxNumber') }, { k: 'currency', label: t('currency') }, { k: 'receiptFooter', label: t('receiptFooter') }]],
     ['look', [{ k: 'lang', label: t('uiLang'), type: 'select', opts: [['ar', 'العربية'], ['en', 'English']] }, { k: 'receiptLang', label: t('receiptLang'), type: 'select', opts: [['ar', 'العربية'], ['en', 'English']] }, { k: 'theme', label: t('theme'), type: 'select', opts: th }, { k: 'numerals', label: t('numerals'), type: 'select', opts: [['western', '0123456789'], ['arabic', '٠١٢٣٤٥٦٧٨٩']] }, { k: 'accent', label: t('accentColor'), type: 'color', def: s.accent || '#2563eb' }, { k: 'receiptWidth', label: t('receiptWidth'), type: 'select', opts: [['80', '80mm'], ['58', '58mm']] }, { k: 'autoPrint', type: 'check', label: '', hint: t('autoPrint') }]],

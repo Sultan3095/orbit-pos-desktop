@@ -3,7 +3,7 @@ const f = (n, l) => Number(n || 0).toLocaleString(l === 'ar' ? 'ar-EG' : 'en-US'
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function draw(p) {
   p = p || {}; const l = p.lang || 'ar'; const x = T[l];
-  document.documentElement.dir = l === 'ar' ? 'rtl' : 'ltr'; document.documentElement.setAttribute('data-theme', p.theme || 'light');
+  document.documentElement.dir = l === 'ar' ? 'rtl' : 'ltr'; document.documentElement.setAttribute('data-theme', (['brand','galaxy','light','dark'].includes(p.theme) ? p.theme : 'brand'));
   const d = document.getElementById('d');
   if (p.thanks) { d.innerHTML = '<div class="dthanks"><h1>' + x.thanks + '</h1><p>' + x.total + ': ' + f(p.total, l) + ' ' + esc(p.currency) + '</p>' + (p.change > 0 ? '<p>' + x.change + ': ' + f(p.change, l) + '</p>' : '') + '</div>'; return; }
   if (!p.lines || !p.lines.length) { d.innerHTML = '<div class="dthanks"><h1>' + x.welcome + (p.store ? ' - ' + esc(p.store) : '') + '</h1></div>'; return; }

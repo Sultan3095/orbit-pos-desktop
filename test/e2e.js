@@ -106,9 +106,17 @@ app.whenReady().then(async () => {
     // 10. switch UI to English + dark + blue
     await click('#b-lang'); await sleep(300); check('UI switched to LTR/EN', await ev(`return document.documentElement.dir==='ltr' && document.querySelector('.nav.on').textContent.includes('Reports')`));
     await click('[data-nav=sell]'); await sleep(200); await shot('15-sell-en-light');
-    await click('#b-theme'); await sleep(200); await shot('16-sell-en-dark');
-    await click('#b-theme'); await sleep(200); await shot('17-sell-en-blue');
-    await click('[data-nav=settings]'); await sleep(300); await shot('18-settings-en-blue');
+    check('default theme is the brand theme', await ev(`return document.documentElement.getAttribute('data-theme')==='brand'`));
+    await shot('16-sell-en-brand');
+    await click('#b-theme'); await sleep(200); await shot('17-theme-picker-en');
+    for (const [k, n] of [['galaxy', '17a-sell-en-galaxy'], ['light', '17b-sell-en-light'], ['dark', '17c-sell-en-dark'], ['brand', '17d-sell-en-brand']]) {
+      await click('[data-theme-pick=' + k + ']'); await sleep(250);
+      check('theme ' + k + ' applied and kept on the user', await ev(`return document.documentElement.getAttribute('data-theme')===${JSON.stringify(k)} && App.user.theme===${JSON.stringify(k)}`));
+      await ev(`document.querySelector('.modal-wrap').style.display='none'; return 1`); await sleep(150); await shot(n); await ev(`document.querySelector('.modal-wrap').style.display=''; return 1`);
+    }
+    check('another user is not affected by this user\'s theme', await ev(`const o=App.db.users.find(u=>u!==App.user && !u.theme); return !o || Core.themeOf(App.db.settings,o)==='brand'`));
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
+    await click('[data-nav=settings]'); await sleep(300); await shot('18-settings-en-brand');
 
     // 12. cashier flow: approval above max discount, hold/resume, serial item, weighed item via scale barcode
     await ev(`App.db.users.push(Core.makeUser('Sara','1111','cashier')); App.db.items.push({id:'sn1',barcode:'8001',name:'Phone',nameEn:'Phone',group:'Electronics',cost:100,price:200,stock:2,minStock:1,serialTracked:true,serials:['IMEI1','IMEI2'],batches:[],created:'2026-01-01T00:00:00Z'},{id:'wt1',barcode:'123',plu:'123',name:'Tomatoes',nameEn:'Tomatoes',group:'Veg',cost:10,price:20,stock:50,minStock:1,byWeight:true,batches:[],serials:[],created:'2026-01-01T00:00:00Z'}); App.db.settings.lang='ar'; applyTheme(); login(); return 1`);

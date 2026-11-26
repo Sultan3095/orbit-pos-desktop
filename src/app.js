@@ -91,8 +91,8 @@ function readForm(root, fields) {
 
 // ---------- theme / language ----------
 function applyTheme() {
-  const s = App.db ? App.db.settings : { theme: 'light', lang: 'ar' };
-  document.documentElement.setAttribute('data-theme', s.theme || 'light');
+  const s = App.db ? App.db.settings : { theme: 'brand', lang: 'ar' };
+  document.documentElement.setAttribute('data-theme', Core.themeOf(s, App.user));
   document.documentElement.lang = s.lang; document.documentElement.dir = s.lang === 'ar' ? 'rtl' : 'ltr';
   if (s.accent) document.documentElement.style.setProperty('--accent', s.accent); else document.documentElement.style.removeProperty('--accent');
   document.title = 'Orbit POS';
@@ -191,7 +191,7 @@ function login() {
     if (b) { sel = App.db.users.find((u) => u.id === b.dataset.u); $('#pinbox').classList.remove('hidden'); $('#pinfor').textContent = sel.name; $('#pin').value = ''; $('#pin').focus(); $$('.user').forEach((x) => x.classList.toggle('on', x === b)); }
     if (e.target.id === 'pin-go') go();
   };
-  const go = () => { if (!sel) return; if (Core.checkPin(sel, $('#pin').value)) { App.user = sel; root.onclick = null; App.cart = newCart(); App.view = 'sell'; shell(); } else { toast(t('wrongPin'), 'err'); $('#pin').value = ''; } };
+  const go = () => { if (!sel) return; if (Core.checkPin(sel, $('#pin').value)) { App.user = sel; applyTheme(); root.onclick = null; App.cart = newCart(); App.view = 'sell'; shell(); } else { toast(t('wrongPin'), 'err'); $('#pin').value = ''; } };
   root.onkeydown = (e) => { if (e.key === 'Enter' && e.target.id === 'pin') go(); };
   if (users.length === 1) { $('[data-u]').click(); }
 }
@@ -211,7 +211,7 @@ function shell() {
   $('.side').onclick = (e) => {
     const n = e.target.closest('[data-nav]'); if (n) { App.view = n.dataset.nav; shell(); }
     if (e.target.id === 'b-lang') { App.db.settings.lang = lang() === 'ar' ? 'en' : 'ar'; applyTheme(); save(); shell(); }
-    if (e.target.id === 'b-theme') { const th = ['light', 'dark', 'blue']; App.db.settings.theme = th[(th.indexOf(App.db.settings.theme) + 1) % th.length]; applyTheme(); save(); }
+    if (e.target.id === 'b-theme') return themePicker();
     if (e.target.id === 'b-out') { if (App.cart && App.cart.lines.length) holdCart(true); save(true); login(); }
   };
   renderView();
@@ -330,7 +330,7 @@ const Sell = {
       '<button class="btn primary pay" data-cart="pay"' + (r.lines.length ? '' : ' disabled') + '>' + t('pay') + ' (F4)</button>';
   },
   pushDisplay() {
-    try { const r = this.calc(); window.api.updateDisplay({ lines: r.lines.map((l) => ({ name: itemName(l, lang()), qty: l.qty, net: l.net, free: l.promoDisc > 0 })), total: r.total, currency: cur(), lang: lang(), theme: App.db.settings.theme, store: App.db.settings.storeName }); } catch (e) {}
+    try { const r = this.calc(); window.api.updateDisplay({ lines: r.lines.map((l) => ({ name: itemName(l, lang()), qty: l.qty, net: l.net, free: l.promoDisc > 0 })), total: r.total, currency: cur(), lang: lang(), theme: Core.themeOf(App.db.settings, App.user), store: App.db.settings.storeName }); } catch (e) {}
   },
   async cartAction(a, i) {
     const c = App.cart;
@@ -408,7 +408,7 @@ async function doPay(w, fields) {
     await save(true);
     if (App.db.settings.printer && App.db.settings.printer.drawerOnCash && App.db.settings.printer.type !== 'system' && sale.payments.some((p) => p.method === 'cash')) { try { window.api.openDrawer(App.db.settings.printer); } catch (e) {} }
     App.cart = newCart(); Sell.renderCart();
-    try { window.api.updateDisplay({ thanks: true, lang: lang(), theme: App.db.settings.theme, total: sale.total, currency: cur(), change: sale.change }); } catch (e) {}
+    try { window.api.updateDisplay({ thanks: true, lang: lang(), theme: Core.themeOf(App.db.settings, App.user), total: sale.total, currency: cur(), change: sale.change }); } catch (e) {}
     showReceiptDone(sale);
   } catch (e) { toast(errMsg(e), 'err'); return false; }
 }
@@ -509,3 +509,11 @@ async function printReceipt(doc, l) {
 }
 
 window.addEventListener('DOMContentLoaded', boot);
+
+// Each user picks his own theme (kept on his user record). The store setting is the fallback before login and for users who never chose.
+function themePicker() {
+  const cur = Core.themeOf(App.db.settings, App.user);
+  const sw = { brand: 'linear-gradient(135deg,#12284C,#1BA39C 70%,#F2A93B)', galaxy: 'radial-gradient(circle at 70% 30%,#8b6cff,#060413 70%)', light: 'linear-gradient(135deg,#F1F5F9,#fff)', dark: '#000' };
+  const m = modal({ title: t('theme'), body: '<div class="themes">' + Core.THEMES.map((k) => '<button class="theme-pick' + (k === cur ? ' on' : '') + '" data-theme-pick="' + k + '"><i style="background:' + sw[k] + '"></i><b>' + t('th_' + k) + '</b></button>').join('') + '</div><p class="muted sm">' + t('themeHint') + '</p>', buttons: [{ label: t('close') }] });
+  m.addEventListener('click', (e) => { const b = e.target.closest('[data-theme-pick]'); if (!b) return; App.user.theme = b.dataset.themePick; save(); applyTheme(); m.querySelectorAll('.theme-pick').forEach((x) => x.classList.toggle('on', x === b)); try { window.api.updateDisplay({ theme: Core.themeOf(App.db.settings, App.user) }); } catch (er) {} });
+}

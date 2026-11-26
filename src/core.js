@@ -49,7 +49,7 @@
   Core.defaultSettings = function () {
     return {
       storeName: 'My Store', storeAddress: '', storePhone: '', taxNumber: '', receiptFooter: '',
-      currency: 'EGP', numerals: 'western', lang: 'ar', receiptLang: 'ar', theme: 'light', accent: '',
+      currency: 'EGP', numerals: 'western', lang: 'ar', receiptLang: 'ar', theme: 'brand', accent: '',
       taxRate: 14, pricesIncludeTax: true,
       returnDays: 14, managerBypassReturnWindow: true,
       maxCashierDiscountPct: 10, // above this the cashier needs manager approval
@@ -328,6 +328,14 @@
     if (rec.status !== 'open') throw new Error('EXR_USED');
     if (Core.creditExpired(rec, now)) throw new Error('EXR_EXPIRED');
     return rec;
+  };
+
+  // ---------- themes ----------
+  Core.THEMES = ['brand', 'galaxy', 'light', 'dark'];
+  /** The theme in force: the user's own choice, else the store setting, else brand. The old 'blue' theme is the brand theme now. */
+  Core.themeOf = function (settings, user) {
+    const pick = (v) => { if (v === 'blue') v = 'brand'; return Core.THEMES.includes(v) ? v : null; };
+    return pick(user && user.theme) || pick(settings && settings.theme) || 'brand';
   };
 
   // ---------- coupons ----------
