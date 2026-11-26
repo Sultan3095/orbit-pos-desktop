@@ -9,6 +9,7 @@ let importRows = null; const printed = [];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let fails = 0; const check = (name, cond, extra) => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (cond ? '' : ' ' + (extra || ''))); if (!cond) fails++; };
 app.whenReady().then(async () => {
+  const realPrint = ipcMain._invokeHandlers && ipcMain._invokeHandlers.get('print:html');
   ipcMain.removeHandler('print:html'); ipcMain.handle('print:html', (_e, html) => { printed.push(html); return { ok: true }; });
   ipcMain.removeHandler('xlsx:open'); ipcMain.handle('xlsx:open', () => (importRows ? { file: 'inv.xlsx', rows: importRows } : null));
   ipcMain.removeHandler('xlsx:save'); ipcMain.handle('xlsx:save', (_e, n, rows) => { fs.writeFileSync(path.join(OUT, n + '.json'), JSON.stringify(rows)); return path.join(OUT, n); });
@@ -274,7 +275,8 @@ app.whenReady().then(async () => {
     check('sheet shows the client name and logo beside the fixed Orbit mark, with client colors and terms', !!gdr && gdr.name && gdr.orbit && gdr.logo && gdr.color && gdr.terms, JSON.stringify(gdr)); check('crop marks on front and back pages', !!gdr && gdr.marks); await shot('67-gift-cards-sheet-client');
     const dof = await ev(`const rows=Core.giftPrintBatch(App.db,200,2); const h=giftCardsSheetHTML(rows,{dataOnly:true,cropMarks:false}); return {noBack:!/data-page="back"/.test(h), noBrand:!/class="gtop"/.test(h), hasNo:h.includes(rows[0].no), noMarks:!/class="gcrop"/.test(h)}`);
     check('data-only mode: just number, QR, barcode and amount, no back page, no marks when switched off', !!dof && dof.noBack && dof.noBrand && dof.hasNo && dof.noMarks, JSON.stringify(dof));
-    const pdf = await ev(`const rows=Core.giftPrintBatch(App.db,200,2); const r=await window.api.print(giftCardsSheetHTML(rows),{pdf:true,pdfPath:'/tmp/orbit-gift-test.pdf'}); return r`);
+    const sheetHtml = await ev(`const rows=Core.giftPrintBatch(App.db,200,2); return giftCardsSheetHTML(rows)`);
+    const pdf = realPrint ? await realPrint({}, sheetHtml, { pdf: true, pdfPath: '/tmp/orbit-gift-test.pdf' }) : null;
     check('PDF export writes a real PDF file', !!pdf && pdf.ok && pdf.head === '%PDF-' && pdf.bytes > 2000, JSON.stringify(pdf));
     await ev(`document.getElementById('sheet-prev')&&document.getElementById('sheet-prev').remove(); document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
     // 10f. the guide mascot: shows on a mistake, points at the exact control, explains when tapped, dismissible, once per issue
