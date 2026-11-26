@@ -185,6 +185,7 @@ function promoModal(p, done, preset) {
 
 // ---------------- Gift cards ----------------
 function giftState(g) {
+  if (g.status === 'writtenoff') return ['giftWrittenOff', 'dim'];
   if (g.status === 'void') return ['giftVoid', 'bad'];
   if (g.expiresOn && Core.today(new Date()) > g.expiresOn) return ['giftExpiredTag', 'bad'];
   if (!(g.balance > 0)) return ['giftUsed', 'dim'];
@@ -196,21 +197,41 @@ Views.gifts = function (m) {
   const q = st.gq.toLowerCase();
   const cards = (App.db.giftCards || []).slice().reverse().filter((g) => !q || g.no.toLowerCase().includes(q) || (g.customerName || '').toLowerCase().includes(q));
   const mgr = can('voidGiftCard');
-  m.innerHTML = head(t('nav_gifts'), '<button class="btn primary" id="g-sell">🎁 ' + t('giftSell') + '</button>') + '<p class="muted">' + t('giftHelp') + '</p>' +
+  m.innerHTML = head(t('nav_gifts'), '<button class="btn" id="g-print">🖨 ' + t('giftPrintCards') + '</button> <button class="btn primary" id="g-sell">🎁 ' + t('giftSell') + '</button>') + '<p class="muted">' + t('giftHelp') + '</p>' +
     '<div class="cards3"><div class="card"><small>' + t('giftLiabilityLine') + '</small><b>' + money(liab.open) + ' ' + esc(cur()) + '</b></div><div class="card"><small>' + t('giftCount') + '</small><b>' + liab.count + '</b></div><div class="card"><small>' + t('giftExpiredLine') + '</small><b>' + money(liab.expired) + '</b></div></div>' +
+    giftDenomBlock() +
     '<div class="bar"><input id="g-q" placeholder="' + t('giftNo') + ' / ' + t('customer') + '" value="' + esc(st.gq) + '"><button class="btn" id="g-check">' + t('giftCheck') + '</button></div>' +
-    table([t('giftNo'), t('giftInitial'), t('giftBalance'), t('giftIssued'), t('giftExpires'), t('giftStatus'), ''], cards.map((g) => { const s = giftState(g); return '<tr class="' + (s[1] === 'dim' ? 'dim' : '') + '"><td dir="ltr">' + esc(g.no) + '</td><td>' + money(g.initial) + '</td><td><b>' + money(g.balance) + '</b></td><td>' + esc(g.issuedOn) + '</td><td>' + esc(g.expiresOn || t('giftNever')) + '</td><td class="' + s[1] + '">' + t(s[0]) + '</td><td><button class="btn sm" data-gh="' + g.id + '">' + t('details') + '</button>' + (mgr && g.status !== 'void' ? ' <button class="btn sm" data-ge="' + g.id + '">' + t('giftExtend') + '</button>' : '') + (mgr && g.status !== 'void' && g.balance === g.initial && g.log.length === 1 ? ' <button class="btn sm danger" data-gv="' + g.id + '">' + t('giftVoid') + '</button>' : '') + '</td></tr>'; }));
+    table([t('giftNo'), t('giftInitial'), t('giftBalance'), t('giftIssued'), t('giftExpires'), t('giftStatus'), ''], cards.map((g) => { const s = giftState(g); return '<tr class="' + (s[1] === 'dim' ? 'dim' : '') + '"><td dir="ltr">' + esc(g.no) + '</td><td>' + money(g.initial) + '</td><td><b>' + money(g.balance) + '</b></td><td>' + esc(g.issuedOn) + '</td><td>' + esc(g.expiresOn || t('giftNever')) + '</td><td class="' + s[1] + '">' + t(s[0]) + '</td><td><button class="btn sm" data-gh="' + g.id + '">' + t('details') + '</button>' + (mgr && g.status !== 'void' ? ' <button class="btn sm" data-ge="' + g.id + '">' + t('giftExtend') + '</button>' : '') + (mgr && g.status === 'active' && g.balance > 0 && g.expiresOn && Core.today(new Date()) > g.expiresOn ? ' <button class="btn sm danger" data-gw="' + g.id + '">' + t('giftWriteOff') + '</button>' : '') + (mgr && g.status !== 'void' && g.balance === g.initial && g.log.length === 1 ? ' <button class="btn sm danger" data-gv="' + g.id + '">' + t('giftVoid') + '</button>' : '') + '</td></tr>'; }));
   const again = () => Views.gifts(m);
   $('#g-q', m).oninput = (e) => { st.gq = e.target.value; const pos = e.target.selectionStart; again(); const i = $('#g-q', m); i.focus(); i.setSelectionRange(pos, pos); };
   m.onclick = async (e) => {
     if (e.target.id === 'g-sell') return giftSellModal(again);
     if (e.target.id === 'g-check') return giftCheckModal();
+    if (e.target.id === 'g-print') return giftPrintModal(again);
+    const gw = e.target.closest('[data-gw]'); if (gw) return giftWriteOffModal(App.db.giftCards.find((x) => x.id === gw.dataset.gw), again);
     const gh = e.target.closest('[data-gh]'); if (gh) return giftHistoryModal(App.db.giftCards.find((x) => x.id === gh.dataset.gh));
     const ge = e.target.closest('[data-ge]'); if (ge) { const g = App.db.giftCards.find((x) => x.id === ge.dataset.ge); const f = [{ k: 'd', label: t('giftExpires'), type: 'date', def: g.expiresOn, first: true }];
       return modal({ title: t('giftExtend') + ' ' + g.no, body: form(f), buttons: [{ label: t('cancel') }, { label: t('save'), cls: 'primary', onClick: (w) => { try { Core.extendGiftCard(App.db, g.no, App.user, readForm(w, f).d); save(); again(); } catch (er) { toast(errMsg(er), 'err'); return false; } } }], enter: 1 }); }
     const gv = e.target.closest('[data-gv]'); if (gv) { const g = App.db.giftCards.find((x) => x.id === gv.dataset.gv); if (await confirmBox(t('giftVoidQ'))) { try { Core.voidGiftCard(App.db, g.no, App.user, ''); save(true); again(); } catch (er) { toast(errMsg(er), 'err'); } } }
   };
 };
+function giftDenomBlock() {
+  const d = Core.giftByDenomination(App.db); if (!d.rows.length) return '';
+  const T = d.total; const cell = (n) => '<td>' + n + '</td>'; const c2 = (n, v) => '<td>' + n + (n ? ' <small class="muted">(' + money(v) + ')</small>' : '') + '</td>';
+  return '<div class="card" id="gift-denom"><h3>' + t('giftByValue') + '</h3>' + table([t('giftValueCol'), t('giftSoldCol'), t('giftUsedCol'), t('giftPartlyCol'), t('giftUntouchedCol'), t('giftOpenCol'), t('giftExpiredCol'), t('giftWrittenOffCol')],
+    d.rows.map((r) => '<tr><td><b>' + money(r.value) + '</b></td>' + cell(r.sold) + cell(r.used) + cell(r.partly) + cell(r.untouched) + c2(r.openCount, r.openBalance) + c2(r.expiredCount, r.expiredBalance) + c2(r.writtenOffCount, r.writtenOffTotal) + '</tr>')
+      .concat(['<tr class="tot"><td><b>' + t('total') + '</b></td>' + cell(T.sold) + cell(T.used) + cell(T.partly) + cell(T.untouched) + c2(T.openCount, T.openBalance) + c2(T.expiredCount, T.expiredBalance) + c2(T.writtenOffCount, T.writtenOffTotal) + '</tr>'])) + '</div>';
+}
+function giftWriteOffModal(g, done) {
+  const f = [{ k: 'reason', label: t('reason'), first: true, wide: true }];
+  modal({ title: t('giftWriteOff') + ' ' + g.no, body: '<p>' + t('giftBalance') + ': <b>' + money(g.balance) + ' ' + esc(cur()) + '</b></p><p class="muted sm">' + t('giftWriteOffHelp') + '</p>' + form(f), buttons: [{ label: t('cancel') }, { label: t('giftWriteOff'), cls: 'danger', onClick: async (w) => {
+    const v = readForm(w, f); try { Core.giftWriteOff(App.db, g.no, App.user, v.reason); await save(true); done(); } catch (e) { toast(errMsg(e), 'err'); return false; } } }], enter: 1 });
+}
+function giftPrintModal(done) {
+  const f = [{ k: 'value', label: t('giftAmount'), type: 'number', step: 'any', first: true }, { k: 'qty', label: t('giftQty'), type: 'number' }];
+  modal({ title: t('giftPrintCards'), body: '<div class="grid2">' + form(f, { qty: 10 }) + '</div><p class="muted sm">' + t('giftPrintHelp') + '</p>', buttons: [{ label: t('cancel') }, { label: '🖨 ' + t('print'), cls: 'primary', onClick: async (w) => {
+    const v = readForm(w, f); try { const rows = Core.giftPrintBatch(App.db, v.value, v.qty); await save(true); printGiftCards(rows); done(); } catch (e) { toast(errMsg(e), 'err'); return false; } } }], enter: 1 });
+}
 function giftHistoryModal(g) {
   const kinds = { issue: sb('إصدار', 'Issued'), redeem: sb('استخدام', 'Used'), refund: sb('مرتجع على الكارت', 'Refunded to card'), 'void-restore': sb('إلغاء فاتورة (رجوع الرصيد)', 'Invoice voided (balance back)'), void: sb('إلغاء الكارت', 'Card cancelled'), expiry: sb('تغيير الانتهاء', 'Expiry changed') };
   modal({ title: t('giftHistory') + ' ' + g.no, body: '<p>' + t('giftBalance') + ': <b>' + money(g.balance) + ' ' + esc(cur()) + '</b></p>' + table([t('time'), t('type'), t('amount'), t('giftBalance'), ''], g.log.map((x) => '<tr><td>' + fmtDT(x.ts) + '</td><td>' + (kinds[x.kind] || x.kind) + '</td><td>' + money(x.amount) + '</td><td>' + money(x.balance) + '</td><td>' + esc(x.ref || '') + '</td></tr>')) });
@@ -335,9 +356,14 @@ function cashMoveModal(kind) {
     let appr = ''; if (kind === 'out' && Core.cashOutNeedsApproval(App.db.settings, v.amount, isMgr())) { const mgr = await managerApproval(t('cashOutApproval')); if (!mgr) return false; appr = mgr.name; }
     Core.cashMove(App.db, App.shift, kind, v.amount, v.reason, appr); await save(true); Views.shift($('#main')); } }], enter: 1 });
 }
+function giftShiftBlock(sum) {
+  if (!sum.giftSoldCount && !sum.giftRedeemed) return '';
+  return '<div class="card" id="gift-close"><h4>🎁 ' + t('giftShiftBlock') + '</h4>' + (sum.giftSoldCount ? table([t('giftValueCol'), t('giftSoldCol'), t('amount')], sum.giftByValue.map((r) => '<tr><td>' + money(r.value) + '</td><td>' + r.count + '</td><td>' + money(r.total) + '</td></tr>')) +
+    '<p>' + t('giftSoldCash') + ': <b>' + money(sum.giftSoldCash) + ' ' + esc(cur()) + '</b></p>' : '') + '<p class="muted sm">' + t('giftRedeemedLine') + ': ' + money(sum.giftRedeemed) + ' ' + esc(cur()) + '</p></div>';
+}
 function closeShiftModal() {
   const sum = Core.shiftSummary(App.db, App.shift); const fields = [{ k: 'counted', label: t('countedCash'), type: 'number', step: 'any', first: true }, { k: 'note', label: t('note') }];
-  const m = modal({ title: t('closeShift'), body: '<div class="paytot">' + (can('seeExpected') ? t('expectedCash') + ': <b>' + money(sum.expectedCash) + '</b>' : t('blindCount')) + '</div><div class="grid2">' + form(fields) + '</div><div id="dif" class="paystat"></div>', buttons: [{ label: t('cancel') }, { label: t('closeShift'), cls: 'primary', onClick: async (w) => {
+  const m = modal({ title: t('closeShift'), body: '<div class="paytot">' + (can('seeExpected') ? t('expectedCash') + ': <b>' + money(sum.expectedCash) + '</b>' : t('blindCount')) + '</div>' + giftShiftBlock(sum) + '<div class="grid2">' + form(fields) + '</div><div id="dif" class="paystat"></div>', buttons: [{ label: t('cancel') }, { label: t('closeShift'), cls: 'primary', onClick: async (w) => {
     const v = readForm(w, fields); if (v.counted == null || v.counted < 0) { toast(t('invalidValue'), 'err'); return false; } const diff = Core.r2(v.counted - sum.expectedCash);
     if (can('seeExpected') && Math.abs(diff) > 0.009 && !v.note) { toast(t('diffNeedsNote'), 'err'); return false; }
     const blind = !can('seeExpected'); const sh = Core.closeShift(App.db, App.shift, v.counted, v.note, { blind }); await save(true); App.shift = null; Views.shift($('#main')); if (blind) toast(t('closePending')); else printZ(sh); } }], enter: 1 });
@@ -347,7 +373,7 @@ function printZ(sh) {
   const s = sh.summary || Core.shiftSummary(App.db, sh); const l = App.db.settings.receiptLang; const m = (n) => money(n, l);
   const row = (k, v) => '<tr><td>' + tr(k, l) + '</td><td class="e">' + v + '</td></tr>';
   const html = '<!doctype html><html dir="' + (l === 'ar' ? 'rtl' : 'ltr') + '"><head><meta charset="utf-8"><style>@page{size:76mm auto;margin:0}body{width:76mm;margin:0 auto;padding:3mm;font:12px "Segoe UI",Tahoma,Arial}h3{text-align:center;margin:2px}table{width:100%}td.e{text-align:' + (l === 'ar' ? 'left' : 'right') + '}hr{border-top:1px dashed #000;border-bottom:0}</style></head><body><h3>' + esc(App.db.settings.storeName) + '</h3><h3>' + tr('zReport', l) + '</h3><hr><table>' +
-    row('cashier', esc(sh.userName)) + row('openedAt', new Date(sh.openedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) + (sh.closedAt ? row('closedAt', new Date(sh.closedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) : '') + row('openingCash', m(sh.openingCash)) + row('salesCount', s.salesCount) + row('salesTotal', m(s.salesTotal)) + row('returns', m(s.returnsTotal)) + row('pm_cash', m(s.byMethod.cash || 0)) + row('pm_card', m(s.byMethod.card || 0)) + row('pm_other', m(s.byMethod.other || 0)) + (s.byMethod.gift ? row('pm_gift', m(s.byMethod.gift)) : '') + (s.giftSoldCount ? row('giftSold', m(s.giftSoldTotal) + ' (' + s.giftSoldCount + ')') : '') + row('cashIn', m(s.cashIn)) + row('cashOut', m(s.cashOut)) + '</table><hr><table>' + row('expectedCash', m(s.expectedCash)) + (sh.closedAt ? row('countedCash', m(sh.countedCash)) + row('difference', m(sh.diff)) : '') + '</table>' + (sh.note ? '<p>' + esc(sh.note) + '</p>' : '') + '</body></html>';
+    row('cashier', esc(sh.userName)) + row('openedAt', new Date(sh.openedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) + (sh.closedAt ? row('closedAt', new Date(sh.closedAt).toLocaleString(l === 'ar' ? locFor('ar') : 'en-GB')) : '') + row('openingCash', m(sh.openingCash)) + row('salesCount', s.salesCount) + row('salesTotal', m(s.salesTotal)) + row('returns', m(s.returnsTotal)) + row('pm_cash', m(s.byMethod.cash || 0)) + row('pm_card', m(s.byMethod.card || 0)) + row('pm_other', m(s.byMethod.other || 0)) + (s.byMethod.gift ? row('pm_gift', m(s.byMethod.gift)) : '') + (s.giftSoldCount ? row('giftSold', m(s.giftSoldTotal) + ' (' + s.giftSoldCount + ')') + (s.giftByValue || []).map((r) => '<tr><td>&nbsp;&nbsp;' + m(r.value) + ' x ' + r.count + '</td><td class="e">' + m(r.total) + '</td></tr>').join('') + row('giftSoldCash', m(s.giftSoldCash || 0)) : '') + (s.giftRedeemed ? row('giftRedeemedLine', m(s.giftRedeemed)) : '') + row('cashIn', m(s.cashIn)) + row('cashOut', m(s.cashOut)) + '</table><hr><table>' + row('expectedCash', m(s.expectedCash)) + (sh.closedAt ? row('countedCash', m(sh.countedCash)) + row('difference', m(sh.diff)) : '') + '</table>' + (sh.note ? '<p>' + esc(sh.note) + '</p>' : '') + '</body></html>';
   window.api.print(html, {});
 }
 

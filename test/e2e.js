@@ -252,6 +252,18 @@ app.whenReady().then(async () => {
     await shot('58-gift-sale-done'); await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(200);
     await click('[data-nav=gifts]'); await sleep(300); await click('[data-gh]'); await sleep(200); await shot('59-gift-history');
     await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(200);
+    // 10e. gift cards: per-denomination report, shift-close block, expiry write-off, printable cards
+    await ev(`const u={amount:0,payments:[],user:App.user,shiftId:App.shift.id}; [[500,0],[500,0],[1000,1]].forEach(([a,d])=>Core.sellGiftCard(App.db,Object.assign({},u,{amount:a,expiresDays:d,payments:[{method:'cash',amount:a}]}))); const old=App.db.giftCards[App.db.giftCards.length-1]; old.expiresOn='2000-01-01'; window.__oldno=old.no; await save(true); return 1`);
+    await click('[data-nav=gifts]'); await sleep(350);
+    check('gift report by card value shows a row per value', await ev(`return document.querySelectorAll('#gift-denom tbody tr').length>=3`)); await shot('60-gift-by-denomination');
+    await click('[data-gw]'); await sleep(200); await shot('61-gift-writeoff-form'); await setv('[name=reason]', 'expired more than a year'); await modalBtn(1); await sleep(400);
+    check('expired card written off by the manager with a reason', await ev(`const g=Core.findGiftCard(App.db, window.__oldno); return g.status==='writtenoff' && g.balance===0 && App.db.giftWriteOffs.length===1`)); await shot('62-gift-written-off');
+    await click('[data-nav=shift]'); await sleep(300); await click('#sh-close'); await sleep(300);
+    check('shift close shows cards sold per value and cash value', await ev(`const b=document.querySelector('#gift-close'); return !!b && b.querySelectorAll('tbody tr').length>=2`)); await shot('63-close-shift-gift-block');
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(150);
+    await click('[data-nav=gifts]'); await sleep(300); await click('#g-print'); await sleep(250); await shot('64-gift-print-form'); await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove())`); await sleep(150);
+    check('printable sheet: real QR and barcode generated from the card number', await ev(`const rows=Core.giftPrintBatch(App.db,500,9); const h=giftCardsSheetHTML(rows); const d=document.createElement('div'); d.id='sheet-prev'; d.style.cssText='position:fixed;inset:0;z-index:99999;background:#fff;overflow:auto;zoom:.5'; const st=h.match(/<style>([\\s\\S]*?)<\\/style>/)[1]; d.innerHTML='<style>'+st.replace(/@page[^}]*}/,'')+'</style>'+h.match(/<body>([\\s\\S]*)<\\/body>/)[1]; document.body.appendChild(d); return d.querySelectorAll('.gqr svg rect').length>100 && d.querySelectorAll('.gbar svg').length===8 && d.textContent.includes(rows[0].no)`)); await shot('65-gift-cards-sheet');
+    await ev(`const d=document.getElementById('sheet-prev'); if(d) d.remove(); return 1`); await sleep(150);
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
     const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);

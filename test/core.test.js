@@ -458,3 +458,36 @@ t('theme: user choice wins, then store setting, then brand; old blue is brand', 
   assert.strictEqual(C.themeOf({ theme: 'nonsense' }, { theme: 'x' }), 'brand');
   assert.strictEqual(C.newDb ? C.newDb().settings.theme : 'brand', 'brand');
 });
+
+// ---- gift card per-denomination, shift block, write-off, printed batch ----
+t('gift cards by denomination: counts and open balance per value; voided cards left out', () => {
+  const x = gk(); const a = sellG(x, 200).card; sellG(x, 200); sellG(x, 500); const v = sellG(x, 500).card; C.voidGiftCard(x.db, v.no, x.boss, 'x');
+  buy(x, 5, [{ method: 'cash', amount: 0 }], { cart: {}, giftCardNo: a.no, giftAmount: 50 });
+  const d = C.giftByDenomination(x.db); const r200 = d.rows.find((r) => r.value === 200), r500 = d.rows.find((r) => r.value === 500);
+  assert.strictEqual(r200.sold, 2); assert.strictEqual(r200.partly, 1); assert.strictEqual(r200.untouched, 1); assert.strictEqual(r200.openBalance, 350);
+  assert.strictEqual(r500.sold, 1); assert.strictEqual(d.total.sold, 3);
+});
+t('shift summary: cards sold per value, cash value, redemption moves no cash', () => {
+  const x = gk(); sellG(x, 200); sellG(x, 200); const c = sellG(x, 1000, { payments: [{ method: 'card', amount: 1000 }] }).card;
+  let sum = C.shiftSummary(x.db, x.sh);
+  assert.deepStrictEqual(sum.giftByValue, [{ value: 200, count: 2, total: 400 }, { value: 1000, count: 1, total: 1000 }]);
+  assert.strictEqual(sum.giftSoldCash, 400); assert.strictEqual(sum.expectedCash, 500);
+  buy(x, 5, [{ method: 'cash', amount: 0 }], { cart: {}, giftCardNo: c.no, giftAmount: 50 });
+  sum = C.shiftSummary(x.db, x.sh); assert.strictEqual(sum.giftRedeemed, 50); assert.strictEqual(sum.expectedCash, 500);
+});
+t('gift card write-off: manager only, expired only, reason needed, leaves the open liability, card unusable', () => {
+  const x = gk(); const g = sellG(x, 300, { expiresOn: '2999-01-01' }).card;
+  throws(() => C.giftWriteOff(x.db, g.no, x.boss, 'old'), 'GIFT_NOT_EXPIRED');
+  g.expiresOn = '2000-01-01';
+  throws(() => C.giftWriteOff(x.db, g.no, x.cash, 'old'), 'MANAGER_ONLY'); throws(() => C.giftWriteOff(x.db, g.no, x.boss, ' '), 'GIFT_REASON');
+  const r = C.giftWriteOff(x.db, g.no, x.boss, 'expired for a year'); assert.strictEqual(r.amount, 300);
+  assert.deepStrictEqual(C.giftLiability(x.db), { open: 0, expired: 0, count: 0 }); assert.strictEqual(x.db.giftWriteOffs.length, 1);
+  throws(() => C.checkGiftCard(x.db, g.no), 'GIFT_WRITTEN_OFF'); throws(() => C.giftWriteOff(x.db, g.no, x.boss, 'again'), 'GIFT_WRITTEN_OFF');
+  const d = C.giftByDenomination(x.db).rows[0]; assert.strictEqual(d.writtenOffCount, 1); assert.strictEqual(d.writtenOffTotal, 300);
+});
+t('printed gift card batch: unique numbers, sale must match the printed value', () => {
+  const x = gk(); const rows = C.giftPrintBatch(x.db, 500, 12); assert.strictEqual(new Set(rows.map((r) => r.no)).size, 12);
+  throws(() => C.giftPrintBatch(x.db, 500, 0), 'GIFT_BAD_QTY'); throws(() => C.giftPrintBatch(x.db, 0, 5), 'GIFT_BAD_AMOUNT');
+  throws(() => sellG(x, 200, { no: rows[0].no }), 'GIFT_PRINTED_VALUE'); const g = sellG(x, 500, { no: rows[0].no }).card; assert.strictEqual(g.no, rows[0].no);
+  throws(() => sellG(x, 500, { no: rows[0].no }), 'GIFT_EXISTS');
+});

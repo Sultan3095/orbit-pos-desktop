@@ -388,6 +388,7 @@
     const g = Core.findGiftCard(db, no);
     if (!g) throw new Error('GIFT_MISSING');
     if (g.status === 'void') throw new Error('GIFT_VOID');
+    if (g.status === 'writtenoff') throw new Error('GIFT_WRITTEN_OFF');
     if (g.expiresOn && Core.today(now || new Date()) > g.expiresOn) throw new Error('GIFT_EXPIRED');
     if (!(g.balance > 0.004)) throw new Error('GIFT_EMPTY');
     return g;
@@ -411,6 +412,9 @@
     let no = String(input.no || '').trim().toUpperCase();
     if (no) { if (!/^[A-Z0-9-]{4,24}$/.test(no)) throw new Error('GIFT_BAD_NO'); if (Core.findGiftCard(db, no)) throw new Error('GIFT_EXISTS'); }
     else { do { db.counters.gift = (db.counters.gift || 0) + 1; no = 'GC' + String(db.counters.gift).padStart(5, '0') + String(Math.floor(Math.random() * 9000) + 1000); } while (Core.findGiftCard(db, no)); }
+    db.giftPrinted = db.giftPrinted || [];
+    const pr = no && db.giftPrinted.find((x) => x.no === no);
+    if (pr && r2(pr.value) !== amount) throw new Error('GIFT_PRINTED_VALUE');
     const issued = Core.today(now);
     const expiresOn = input.expiresOn != null && input.expiresOn !== '' ? input.expiresOn : (input.expiresDays > 0 ? Core.addDays(issued, input.expiresDays) : '');
     if (expiresOn && expiresOn <= issued) throw new Error('GIFT_BAD_EXPIRY');
@@ -418,6 +422,7 @@
       customerName: input.customerName || '', lines: [], gross: amount, lineDisc: 0, invoiceDisc: 0, subtotal: amount, tax: 0, total: amount, cogs: 0, payments: pays, paid, change, giftCardNo: no, status: 'completed', returned: {} };
     const g = { id: Core.uid('gc'), no, initial: amount, balance: amount, issuedOn: issued, expiresOn, status: 'active', soldIn: sale.no, soldSaleId: sale.id, customerName: input.customerName || '', log: [] };
     Core.giftLog(g, 'issue', amount, sale.no, now);
+    if (pr) pr.soldOn = issued;
     db.giftCards.push(g); db.sales.push(sale);
     return { card: g, sale };
   };
@@ -444,6 +449,51 @@
     const today = Core.today(now || new Date()); let open = 0, expired = 0, count = 0;
     (db.giftCards || []).forEach((g) => { if (g.status === 'void' || !(g.balance > 0)) return; if (g.expiresOn && today > g.expiresOn) expired = r2(expired + g.balance); else { open = r2(open + g.balance); count++; } });
     return { open, expired, count };
+  };
+
+  /** Manager only: an expired card balance is written off. The money leaves the liability (the accountant books the income). */
+  Core.giftWriteOff = function (db, no, user, reason, now) {
+    if (!Core.can(db, user, 'voidGiftCard')) throw new Error('MANAGER_ONLY');
+    if (String(reason || '').trim().length < 3) throw new Error('GIFT_REASON');
+    const g = Core.findGiftCard(db, no); if (!g) throw new Error('GIFT_MISSING');
+    if (g.status === 'void') throw new Error('GIFT_VOID');
+    if (g.status === 'writtenoff') throw new Error('GIFT_WRITTEN_OFF');
+    if (!(g.expiresOn && Core.today(now || new Date()) > g.expiresOn)) throw new Error('GIFT_NOT_EXPIRED');
+    if (!(g.balance > 0.004)) throw new Error('GIFT_EMPTY');
+    const amount = r2(g.balance);
+    db.giftWriteOffs = db.giftWriteOffs || [];
+    db.giftWriteOffs.push({ id: Core.uid('gwo'), no: g.no, amount, reason: String(reason).trim(), by: user.name, ts: (now || new Date()).toISOString() });
+    g.balance = 0; g.status = 'writtenoff'; Core.giftLog(g, 'writeoff', amount, String(reason).trim(), now);
+    return { card: g, amount };
+  };
+  /** One row per card value: sold, fully used, partly used, untouched, open balance, expired, written off. Voided cards are left out. */
+  Core.giftByDenomination = function (db, now) {
+    const today = Core.today(now || new Date()); const map = {};
+    (db.giftCards || []).forEach((g) => {
+      if (g.status === 'void') return;
+      const k = r2(g.initial); const r = map[k] || (map[k] = { value: k, sold: 0, soldTotal: 0, used: 0, partly: 0, untouched: 0, openCount: 0, openBalance: 0, expiredCount: 0, expiredBalance: 0, writtenOffCount: 0, writtenOffTotal: 0 });
+      r.sold++; r.soldTotal = r2(r.soldTotal + g.initial);
+      if (g.status === 'writtenoff') { r.writtenOffCount++; r.writtenOffTotal = r2(r.writtenOffTotal + (g.log.filter((x) => x.kind === 'writeoff').reduce((t, x) => t + x.amount, 0))); return; }
+      const expired = g.expiresOn && today > g.expiresOn;
+      if (!(g.balance > 0.004)) { r.used++; return; }
+      if (r2(g.balance) === r2(g.initial)) r.untouched++; else r.partly++;
+      if (expired) { r.expiredCount++; r.expiredBalance = r2(r.expiredBalance + g.balance); } else { r.openCount++; r.openBalance = r2(r.openBalance + g.balance); }
+    });
+    const rows = Object.keys(map).map((k) => map[k]).sort((a, b) => a.value - b.value);
+    const sum = rows.reduce((t, r) => { Object.keys(r).forEach((k) => { if (k !== 'value') t[k] = r2((t[k] || 0) + r[k]); }); return t; }, {});
+    return { rows, total: sum };
+  };
+  /** A pool of card numbers for printing. The value is printed on the card, so the sale checks it. */
+  Core.giftPrintBatch = function (db, value, qty, now) {
+    value = r2(Number(value)); qty = Math.floor(Number(qty));
+    if (!(value > 0)) throw new Error('GIFT_BAD_AMOUNT');
+    if (!(qty >= 1 && qty <= 500)) throw new Error('GIFT_BAD_QTY');
+    db.giftPrinted = db.giftPrinted || []; const out = [];
+    for (let i = 0; i < qty; i++) {
+      let no; do { db.counters.gift = (db.counters.gift || 0) + 1; no = 'GC' + String(db.counters.gift).padStart(5, '0') + String(Math.floor(Math.random() * 9000) + 1000); } while (Core.findGiftCard(db, no) || db.giftPrinted.some((x) => x.no === no));
+      const row = { no, value, printedOn: Core.today(now || new Date()), soldOn: '' }; db.giftPrinted.push(row); out.push(row);
+    }
+    return out;
   };
 
   // ---------- sales ----------
@@ -813,6 +863,10 @@
     const lim = settings && settings.cashOutLimit != null ? settings.cashOutLimit : 200;
     return !isManager && amount > lim;
   };
+  Core.giftShiftRows = function (gsales) {
+    const m = {}; gsales.forEach((g) => { const k = r2(g.total); const r = m[k] || (m[k] = { value: k, count: 0, total: 0 }); r.count++; r.total = r2(r.total + g.total); });
+    return Object.keys(m).map((k) => m[k]).sort((a, b) => a.value - b.value);
+  };
   Core.shiftSummary = function (db, shift) {
     const rows = db.sales.filter((x) => x.shiftId === shift.id && x.status !== 'voided');
     const view = (x) => (x.closedShiftView && shift.closedAt ? Object.assign({}, x, x.closedShiftView) : x); // a closed shift keeps the numbers it was closed with
@@ -829,7 +883,7 @@
     const cashOut = r2(shift.moves.filter((m) => m.kind === 'out').reduce((t, m) => t + m.amount, 0));
     const expectedCash = r2(shift.openingCash + (byMethod.cash || 0) - (refunds.cash || 0) + cashIn - cashOut);
     return { salesCount: sales.length, returnsCount: rets.length, salesTotal: r2(sales.reduce((t, s) => t + s.total, 0)),
-      returnsTotal: r2(rets.reduce((t, r) => t + r.refund, 0)), giftSoldCount: gsales.length, giftSoldTotal: r2(gsales.reduce((t, g) => t + g.total, 0)), byMethod, refunds, cashIn, cashOut, expectedCash };
+      returnsTotal: r2(rets.reduce((t, r) => t + r.refund, 0)), giftSoldCount: gsales.length, giftSoldTotal: r2(gsales.reduce((t, g) => t + g.total, 0)), giftSoldCash: r2(gsales.reduce((t, g) => t + g.payments.filter((p) => p.method === 'cash').reduce((a, p) => a + p.amount, 0) - g.change, 0)), giftByValue: Core.giftShiftRows(gsales), giftRedeemed: r2(sales.reduce((t, x) => t + x.payments.filter((p) => p.method === 'gift').reduce((a, p) => a + p.amount, 0), 0)), byMethod, refunds, cashIn, cashOut, expectedCash };
   };
   /** opts.blind: the closer may not see the expected cash. The count is saved, the shift is locked (no more sales), and the close waits for an approver. */
   Core.closeShift = function (db, shift, countedCash, note, opts) {
