@@ -35,7 +35,7 @@
     ],
     "npmRebuild": true
   },
-  "license": "UNLICENSED",
+  "license": "GPL-3.0-or-later",
   "private": true,
   "devDependencies": {
     "@electron/packager": "^20.3.0",

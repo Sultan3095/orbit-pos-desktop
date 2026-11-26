@@ -34,3 +34,7 @@ Barcode, Name (needed only for new items), Qty, Cost, Discount %, Batch, Expiry 
 - Cash drawer opening, direct serial-port scales, Egyptian e-receipt (ETA) integration, multi-terminal sync: not included.
 - Thermal printing uses the Windows print dialog (set the receipt printer as default or pick it each time).
 - The app is unsigned: Windows SmartScreen shows "More info > Run anyway".
+
+## License
+
+GPL-3.0-or-later (see LICENSE). Orbit POS is open source. The web app matches the GPL used by Frappe/ERPNext. The business model is support, hosting and customization, not license sales.
