@@ -34,8 +34,8 @@ function toast(msg, kind) {
   $('#toasts').appendChild(el); setTimeout(() => el.classList.add('hide'), kind === 'err' ? 5000 : 2200); setTimeout(() => el.remove(), 5600);
 }
 function errMsg(e) {
-  const code = e.message; const key = 'err_' + code; const m = t(key);
-  return (m === key ? code : m) + (e.item ? ' (' + e.item + ')' : '') + (e.no ? ' (' + e.no + ')' : '');
+  const code = ((e && e.message) || '').match(/[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|\b(?:EMPTY|LOCKED)\b/); const raw = (e && e.message) || ''; const code2 = code ? code[0] : raw; const key = 'err_' + code2; const m = t(key);
+  return (m === key ? raw : m) + (e.item ? ' (' + e.item + ')' : '') + (e.no ? ' (' + e.no + ')' : '');
 }
 
 // ---------- modal ----------
@@ -115,7 +115,7 @@ function secSetup(info) {
       if (p.length < 6) { err.textContent = sb('كلمة السر أقل من 6 حروف', 'Passphrase is shorter than 6 characters'); return; }
       if (p !== p2) { err.textContent = sb('كلمتا السر مش متطابقتين', 'Passphrases do not match'); return; }
       const m = ($('input[name=sm]:checked') || {}).value || 'prompt';
-      let r; try { r = await window.api.storeCreate(p, m); } catch (e) { err.textContent = e.message; return; }
+      let r; try { r = await window.api.storeCreate(p, m); } catch (e) { err.textContent = errMsg(e); return; }
       secShowRecovery(r.recoveryKey, resolve);
     };
     root.onclick = (e) => { if (e.target.id === 'sec-create') go(); }; root.onkeydown = (e) => { if (e.key === 'Enter') go(); };
@@ -134,7 +134,7 @@ function secShowRecovery(key, done) {
 function secUnlock() {
   return new Promise((resolve) => {
     const root = secShell('<h2>🔐 ' + sb('البيانات مقفولة', 'Data is locked') + '</h2><p>' + sb('اكتب كلمة السر أو مفتاح الاسترجاع.', 'Enter your passphrase or recovery key.') + '</p><input id="sec-unlock-input" type="password" autofocus><div id="sec-err" class="err"></div><div class="row"><button class="btn primary" id="sec-unlock-btn">' + sb('فتح', 'Unlock') + '</button></div>');
-    const go = async () => { const ok = await window.api.storeUnlock($('#sec-unlock-input').value); if (ok) { root.onclick = null; resolve(); } else $('#sec-err').textContent = sb('كلمة السر أو المفتاح غلط', 'Wrong passphrase or key'); };
+    const go = async () => { let ok = false; try { ok = await window.api.storeUnlock($('#sec-unlock-input').value); } catch (e) { $('#sec-err').textContent = errMsg(e); return; } if (ok) { root.onclick = null; resolve(); } else $('#sec-err').textContent = sb('كلمة السر أو المفتاح غلط', 'Wrong passphrase or key'); };
     root.onclick = (e) => { if (e.target.id === 'sec-unlock-btn') go(); }; root.onkeydown = (e) => { if (e.key === 'Enter') go(); };
   });
 }

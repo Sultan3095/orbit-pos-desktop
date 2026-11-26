@@ -210,6 +210,8 @@ app.whenReady().then(async () => {
     await new Promise((r) => fake.listen(0, '127.0.0.1', r)); const fport = fake.address().port; const ESC = require('../escpos.js');
     await ev(`Views.settings($('#main')); return 1`); await sleep(400);
     await ev(`document.querySelector('[name=pr_type]').value='network'; document.querySelector('[name=pr_host]').value='127.0.0.1'; document.querySelector('[name=pr_port]').value='${fport}'; document.querySelector('[name=pr_drawerOnCash]').checked=true; document.getElementById('printer-card').scrollIntoView(); return 1`);
+    await click('#hc-run'); await sleep(600);
+    check('problem check runs and shows findings in plain language', await ev(`const o=document.querySelector('#hc-out'); return o && o.children.length>=3 && !/hc_/.test(o.textContent)`)); await shot('43b-problem-check');
     await click('#pr-save'); await sleep(300); await click('#pr-test'); await sleep(2500); await shot('44-printer-settings-ar');
     const tj = fakeJobs[fakeJobs.length - 1]; const tev = tj ? ESC.decode(tj) : [];
     check('test page reaches the fake printer as init + raster + feed + cut + drawer', tev.map((x) => x.t).join(',').startsWith('init,raster') && tev.some((x) => x.t === 'cut') && tev.some((x) => x.t === 'drawer'), tev.map((x) => x.t).join(','));

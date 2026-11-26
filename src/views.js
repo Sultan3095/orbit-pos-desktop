@@ -323,7 +323,7 @@ Views.settings = function (m) {
   ];
   const vals = Object.assign({}, s, { receiptWidth: String(s.receiptWidth), accent: s.accent || '#2563eb' });
   m.innerHTML = head(t('nav_settings'), '<button class="btn primary" id="st-save">' + t('save') + '</button>') + F.map((g) => '<div class="card"><h3>' + t('sg_' + g[0]) + '</h3><div class="grid3">' + form(g[1], vals) + '</div></div>').join('') +
-    (can('settings') ? printerCardHTML() : '') + (can('settings') ? '<div class="card" id="perm-card"><h3>🔑 ' + t('permMatrix') + '</h3><p class="muted">Y = ' + sb('مسموح', 'allowed') + ' · A = ' + sb('بموافقة مدير', 'needs approval') + ' · N = ' + sb('ممنوع', 'denied') + '</p>' + permMatrixHTML() + '</div><div class="card"><h3>' + t('editLog') + '</h3>' + editLogHTML() + '</div>' : '') +
+    (can('settings') ? healthCardHTML() : '') + (can('settings') ? printerCardHTML() : '') + (can('settings') ? '<div class="card" id="perm-card"><h3>🔑 ' + t('permMatrix') + '</h3><p class="muted">Y = ' + sb('مسموح', 'allowed') + ' · A = ' + sb('بموافقة مدير', 'needs approval') + ' · N = ' + sb('ممنوع', 'denied') + '</p>' + permMatrixHTML() + '</div><div class="card"><h3>' + t('editLog') + '</h3>' + editLogHTML() + '</div>' : '') +
     '<div class="card"><h3>' + t('users') + '</h3><div id="ulist"></div><button class="btn" id="u-add">+ ' + t('addUser') + '</button></div>' +
     '<div class="card" id="sec-card"><h3>🔐 ' + sb('حماية البيانات', 'Data protection') + '</h3><p class="muted" id="sec-state"></p><div class="row"><button class="btn" id="sec-mode"></button><button class="btn" id="sec-change">' + sb('تغيير كلمة السر', 'Change passphrase') + '</button></div></div>' +
     '<div class="card"><h3>' + t('backup') + '</h3><p class="muted">' + t('backupInfo') + '</p><div class="row"><button class="btn" id="b-now">💾 ' + t('backupNow') + '</button><button class="btn" id="b-res">♻ ' + t('restore') + '</button><button class="btn" id="b-dir">📁 ' + t('chooseFolder') + '</button><span class="muted">' + esc(s.backupDir || t('defaultFolder')) + '</span></div><div class="muted sm" id="dpath"></div></div>';
@@ -340,6 +340,7 @@ Views.settings = function (m) {
       for (const k of ['taxRate', 'maxCashierDiscountPct', 'lowStockDefault', 'returnDays', 'cashOutLimit', 'loyaltyEarnPerCurrency', 'loyaltyPointValue', 'slowDays', 'expiryWarnDays']) { if (v[k] != null && v[k] >= 0) s[k] = v[k]; }
       await save(true); applyTheme(); toast(t('saved')); shell();
     }
+    if (e.target.id === 'hc-run') { await runHealthCheck($('#hc-out', m)); return; }
     if (e.target.id === 'pr-save' || e.target.id === 'pr-test' || e.target.id === 'pr-drawer') {
       const g = (k) => $('[name=pr_' + k + ']', m); const p = App.db.settings.printer = { type: g('type').value, host: g('host').value.trim(), port: Number(g('port').value) || 9100, path: g('path').value.trim(), width: Number(g('width').value) || 80, drawerOnCash: g('drawerOnCash').checked, drawerPin: Number(g('drawerPin').value) || 0, cut: g('cut').checked };
       await save(true); const out = $('#pr-out', m);
@@ -356,7 +357,7 @@ Views.settings = function (m) {
       if (/\.db$/i.test(f)) secret = await askSecret(sb('اكتب كلمة السر أو مفتاح الاسترجاع الخاص بالنسخة دي', 'Enter the passphrase or recovery key of this backup')); if (/\.db$/i.test(f) && !secret) return;
       const text = await window.api.readBackup(f, secret); await window.api.replaceAll(text); App.db = JSON.parse(text); Store.prime(App.db);
       const def = Core.defaultSettings(); for (const k in def) if (App.db.settings[k] === undefined) App.db.settings[k] = def[k];
-      toast(t('restored')); login(); } catch (er) { toast(er.message === 'WRONG_SECRET' ? sb('كلمة السر أو المفتاح غلط', 'Wrong passphrase or key') : er.message, 'err'); } }
+      toast(t('restored')); login(); } catch (er) { toast(errMsg(er), 'err'); } }
     if (e.target.id === 'sec-mode') { try { const cur = (await window.api.storeInfo()).mode; const nm = cur === 'os' ? 'prompt' : 'os'; await window.api.storeSetMode(nm); toast(sb('تم تغيير طريقة الفتح', 'Unlock mode changed')); Views.settings(m); } catch (er) { toast(er.message === 'OS_UNAVAILABLE' ? sb('الجهاز مش بيدعم الحفظ الآمن', 'This PC cannot store it securely') : er.message, 'err'); } }
     if (e.target.id === 'sec-change') changePassModal();
   };
@@ -416,6 +417,15 @@ function editLogHTML() {
 function testPageHTML() {
   const s = App.db.settings; const w = Number(s.printer.width) === 58 ? '54mm' : '76mm';
   return '<!doctype html><html dir="rtl"><head><meta charset="utf-8"><style>body{width:' + w + ';margin:0 auto;padding:3mm;font:12px/1.4 "Segoe UI",Tahoma,Arial,sans-serif;color:#000;box-sizing:border-box}h2,p{text-align:center;margin:2px 0}hr{border:0;border-top:1px dashed #000}</style></head><body><h2>Orbit POS</h2><p>اختبار الطابعة · Printer test</p><hr><p>مرحبا 0123456789 ٠١٢٣٤٥٦٧٨٩</p><p>ABCDEFGHIJ abcdefghij</p><p>' + esc(s.storeName) + '</p><hr><p>' + new Date().toLocaleString('en-GB') + '</p></body></html>';
+}
+function healthCardHTML() {
+  return '<div class="card" id="health-card"><h3>🩺 ' + t('hc_title') + '</h3><p class="muted">' + t('hc_hint') + '</p><div id="hc-out"></div><div class="row"><button class="btn" id="hc-run">' + t('hc_run') + '</button></div></div>';
+}
+async function runHealthCheck(out) {
+  let age = null; try { age = await window.api.backupAge(); } catch (e) {}
+  const r = Core.healthCheck(App.db, { backupAgeDays: age });
+  const ic = { ok: '✅', warn: '⚠️', bad: '❌' };
+  out.innerHTML = r.map((x) => '<div class="' + (x.level === 'ok' ? 'good' : x.level === 'bad' ? 'bad' : '') + '">' + ic[x.level] + ' ' + esc(t('hc_' + x.id, { n: x.arg })) + '</div>').join('');
 }
 function printerCardHTML() {
   const p = App.db.settings.printer || {}; const opt = (v, l) => '<option value="' + v + '"' + (p.type === v ? ' selected' : '') + '>' + l + '</option>';

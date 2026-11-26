@@ -211,6 +211,16 @@ t('void reverses loyalty: earned points removed, redeemed points returned', () =
   const mid = db.customers[0].points; assert.ok(mid !== 50);
   C.voidSale(db, sale.id, db.users[0], 'x'); assert.strictEqual(db.customers[0].points, 50);
 });
+t('problem check: finds missing manager, stale shift, bad prices, duplicate barcodes; ok when clean', () => {
+  const db = C.newDB(); let ids = (r) => r.map((x) => x.id + ':' + x.level).join(' ');
+  assert.ok(/noManager:bad/.test(ids(C.healthCheck(db, { backupAgeDays: 0 }))));
+  db.users.push(C.makeUser('B', '1234', 'manager'));
+  db.items.push({ id: 'a', barcode: '1', name: 'A', cost: 10, price: 5, stock: -1 }, { id: 'b', barcode: '1', name: 'B', cost: 1, price: 2, stock: 3 });
+  const sh = C.openShift(db, db.users[0], 0, 'P'); sh.openedAt = new Date(Date.now() - 30 * 3600e3).toISOString();
+  const r = ids(C.healthCheck(db, { backupAgeDays: null }));
+  ['backupNever:bad', 'shiftStale:warn', 'negStock:warn', 'belowCost:warn', 'dupBarcode:bad'].forEach((x) => assert.ok(r.includes(x), x + ' in ' + r));
+  assert.ok(ids(C.healthCheck(db, { backupAgeDays: 5 })).includes('backupOld:warn'));
+});
 console.log(n + ' passed');
 
 // ---- PIN hashing (scrypt) ----

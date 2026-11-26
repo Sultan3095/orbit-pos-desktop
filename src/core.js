@@ -709,6 +709,25 @@
   };
 
   /** What an approver is shown before approving a blind close. */
+
+  /** Problem check: plain findings the owner can act on. level: ok | warn | bad. ctx.backupAgeDays: null = never. */
+  Core.healthCheck = function (db, ctx, now) {
+    now = now || new Date(); ctx = ctx || {}; const out = []; const add = (level, id, arg) => out.push({ level, id, arg: arg == null ? '' : String(arg) });
+    const act = db.items.filter((i) => i.active !== false && !i.service);
+    if (!db.users.some((u) => u.active !== false && (u.role === 'manager' || u.role === 'system'))) add('bad', 'noManager'); else add('ok', 'managerOk');
+    if (ctx.backupAgeDays == null) add('bad', 'backupNever'); else if (ctx.backupAgeDays > 2) add('warn', 'backupOld', Math.floor(ctx.backupAgeDays)); else add('ok', 'backupOk');
+    const stale = db.shifts.filter((x) => !x.closedAt && now - new Date(x.openedAt) > 24 * 3600e3);
+    if (stale.length) add('warn', 'shiftStale', stale.length);
+    const pend = db.shifts.filter((x) => x.approval === 'pending');
+    if (pend.length) add('warn', 'closePending', pend.length);
+    if (!(db.settings.taxRate > 0)) add('warn', 'noTax');
+    const neg = act.filter((i) => (i.stock || 0) < 0); if (neg.length) add('warn', 'negStock', neg.length);
+    const below = act.filter((i) => i.cost > 0 && i.price > 0 && i.price < i.cost); if (below.length) add('warn', 'belowCost', below.length);
+    const noBar = act.filter((i) => !i.barcode); if (noBar.length) add('warn', 'noBarcode', noBar.length);
+    const dup = {}; act.forEach((i) => { if (i.barcode) dup[i.barcode] = (dup[i.barcode] || 0) + 1; }); const nd = Object.keys(dup).filter((k) => dup[k] > 1).length; if (nd) add('bad', 'dupBarcode', nd);
+    const pr = db.settings.printer || {}; if (!pr.type || pr.type === 'system') add('warn', 'printerSystem'); else add('ok', 'printerSet');
+    return out;
+  };
   Core.pendingCloseView = function (db, shift) { if (shift.approval !== 'pending') throw new Error('NOT_PENDING'); return { expectedCash: shift._sealed.expectedCash, countedCash: shift.countedCash, diff: shift._sealed.diff, closedBy: shift.userName, closedAt: shift.closedAt }; };
   Core.approveClose = function (db, shift, approver, note) {
     if (shift.approval !== 'pending') throw new Error('NOT_PENDING');

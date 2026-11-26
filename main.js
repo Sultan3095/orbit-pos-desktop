@@ -58,6 +58,7 @@ ipcMain.handle('db:delta', (_e, d) => needDb().applyDelta(d));
 ipcMain.on('db:deltaSync', (e, d) => { try { needDb().applyDelta(d); e.returnValue = true; } catch (err) { e.returnValue = false; } });
 ipcMain.handle('db:replaceAll', (_e, text) => { const st = needDb(); doBackup('before-restore'); st.replaceAll(text); return true; });
 ipcMain.handle('app:info', () => ({ dataFile: getStore().dbFile, version: app.getVersion(), backupDir: defaultBackupDir() }));
+ipcMain.handle('backup:age', () => { try { const dir = backupDir(); const t = fs.readdirSync(dir).filter((n) => /^orbit-pos-.*\.db$/.test(n)).map((n) => fs.statSync(path.join(dir, n)).mtimeMs); return t.length ? (Date.now() - Math.max(...t)) / 86400e3 : null; } catch (e) { return null; } });
 ipcMain.handle('backup:now', () => doBackup('manual'));
 ipcMain.handle('backup:pick', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'Orbit POS backup', extensions: ['db', 'json'] }], defaultPath: backupDir() });
