@@ -329,7 +329,7 @@ const Sell = {
       '<div class="muted sm"><span>' + t('incl_tax') + '</span><span>' + money(r.tax) + '</span></div>' +
       '<div class="grand"><span>' + t('total') + '</span><span>' + money(r.total) + ' <small>' + esc(cur()) + '</small></span></div></div>' +
       '<div class="actions"><button class="btn" data-cart="disc">% ' + t('discount') + '</button><button class="btn" data-cart="cust">👤 ' + t('customer') + '</button><button class="btn" data-cart="coupon">🎟 ' + t('cpButton') + (App.cart.couponCode ? ' ✓' : '') + '</button><button class="btn" data-cart="hold">⏸ ' + t('hold') + ' (F8)</button><button class="btn danger" data-cart="clear">🗑</button></div>' +
-      '<button class="btn primary pay" data-cart="pay"' + (r.lines.length ? '' : ' disabled') + '>' + t('pay') + ' (F4)</button>';
+      '<button class="btn primary pay" data-cart="pay"' + (r.lines.length ? '' : ' aria-disabled="true" style="opacity:.55"') + '>' + t('pay') + ' (F4)</button>';
   },
   pushDisplay() {
     try { const r = this.calc(); window.api.updateDisplay({ lines: r.lines.map((l) => ({ name: itemName(l, lang()), qty: l.qty, net: l.net, free: l.promoDisc > 0 })), total: r.total, currency: cur(), lang: lang(), theme: Core.themeOf(App.db.settings, App.user), store: App.db.settings.storeName }); } catch (e) {}
