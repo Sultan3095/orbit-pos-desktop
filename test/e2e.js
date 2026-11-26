@@ -284,7 +284,7 @@ app.whenReady().then(async () => {
     await click('[data-cart=pay]'); await sleep(400);
     const gd1 = await ev(`const g=document.querySelector('#guide[data-guide=EMPTY_CART]'); if(!g) return null; const r=document.querySelector('.gring').getBoundingClientRect(), q=document.querySelector('#q').getBoundingClientRect(); const arm=g.querySelector('#g-arm').getAttribute('transform'); return {ringOnTarget: Math.abs(r.left+r.width/2-(q.left+q.width/2))<4 && Math.abs(r.top+r.height/2-(q.top+q.height/2))<4, arm, bub:g.querySelector('.gbub').textContent}`);
     check('mascot appears on an empty cart and its ring sits on the scan field', !!gd1 && gd1.ringOnTarget && /rotate\(-?[0-9.]+ 84 62\)/.test(gd1.arm), JSON.stringify(gd1)); await shot('70-guide-empty-cart');
-    await click('.gman'); await sleep(200);
+    await click('#guide [data-g=tap]'); await sleep(200);
     check('tapping the mascot explains how to fix it', await ev(`return !!document.querySelector('#guide [data-g=long]') && document.querySelector('#guide [data-g=long]').textContent.length>30`)); await shot('71-guide-explain');
     await click('[data-g=ok]'); await sleep(200);
     check('dismissed and remembered: gone, and it does not repeat for the same issue', await ev(`const gone=!document.querySelector('#guide'); return gone && App.user.guideSeen.EMPTY_CART===1`));
@@ -296,6 +296,8 @@ app.whenReady().then(async () => {
     check('English text when the interface is English', await ev(`const g=document.querySelector('#guide'); return !!g && /empty/i.test(g.textContent)`)); await ev(`Guide.close(); return 1`);
     await click('#b-guide'); await sleep(150); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(300);
     check('guide can be switched off per user', await ev(`return App.user.guideOff===true && !document.querySelector('#guide')`)); await click('#b-guide'); await sleep(150);
+    await ev(`App.user.guideOff=false; Guide.close(); toast('Printer not reachable','err'); return 1`); await sleep(700);
+    check('any other error: the mascot appears too and points at the message', await ev(`const g=document.querySelector('#guide[data-guide=ERROR]'); return !!g && /Printer not reachable/.test(g.textContent) && !!document.querySelector('.gring')`)); await shot('74-guide-any-error'); await ev(`Guide.close(); return 1`);
     await click('#b-lang'); await sleep(300);
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
