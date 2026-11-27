@@ -196,7 +196,7 @@ app.whenReady().then(async () => {
     await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
     await click('[data-ap]'); await sleep(400); await shot('47-manager-approves-close-ar');
     check('approver sees expected vs counted vs difference', await ev(`const tx=document.querySelector('.modal-wrap').textContent; return tx.includes('58') && tx.includes('55')`));
-    await setv('[name=note]', 'عدّ تاني ونقص 3'); await modalBtn(1); await sleep(600);
+    await setv('[name=note]', 'عدّ تاني ونقص 3'); await modalBtn(2); await sleep(600);
     check('after approval the close is final with expected and difference', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='approved' && s.expectedCash===58 && s.diff===-3 && s.approvedBy==='Mona'`));
     await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
     await ev(`App.user=App._sys; shell(); Views.settings($('#main')); return 1`); await sleep(500);
