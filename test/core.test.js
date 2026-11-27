@@ -491,3 +491,75 @@ t('printed gift card batch: unique numbers, sale must match the printed value', 
   throws(() => sellG(x, 200, { no: rows[0].no }), 'GIFT_PRINTED_VALUE'); const g = sellG(x, 500, { no: rows[0].no }).card; assert.strictEqual(g.no, rows[0].no);
   throws(() => sellG(x, 500, { no: rows[0].no }), 'GIFT_EXISTS');
 });
+
+// ---- loyalty phone protection ----
+const mkLoyal = () => { const db = mk(); db.settings.loyaltyEnabled = true; db.settings.loyaltyPointValue = 1; db.settings.loyaltyEarnPerCurrency = 10;
+  db.customers.push({ id: 'cu1', name: 'Mona', phone: '0105551234', points: 50 }); return db; };
+t('loyalty redeem: matching phone passes', () => {
+  const db = mkLoyal(); const s = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)], redeemValue: 5 }, payments: pay(20), user: db.users[1], customerId: 'cu1', loyaltyPhone: '0105551234' });
+  assert.strictEqual(s.loyaltyPhoneOverride, ''); });
+t('loyalty redeem: wrong phone is refused', () => {
+  const db = mkLoyal(); assert.throws(() => C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)], redeemValue: 5 }, payments: pay(20), user: db.users[1], customerId: 'cu1', loyaltyPhone: '0109999999' }), /LOYALTY_PHONE/); });
+t('loyalty redeem: wrong phone passes with a manager override, recorded on the sale', () => {
+  const db = mkLoyal(); const s = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)], redeemValue: 5 }, payments: pay(20), user: db.users[1], customerId: 'cu1', loyaltyPhone: '0109999999', loyaltyApprover: db.users[0] });
+  assert.strictEqual(s.loyaltyPhoneOverride, 'Boss'); });
+t('loyalty redeem: a cashier is not an override approver', () => {
+  const db = mkLoyal(); db.users.push(C.makeUser('Cash2', '1111', 'cashier'));
+  assert.throws(() => C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)], redeemValue: 5 }, payments: pay(20), user: db.users[1], customerId: 'cu1', loyaltyPhone: '0109999999', loyaltyApprover: db.users[2] }), /LOYALTY_PHONE/); });
+t('phone matching: arabic digits and last-9 match', () => {
+  assert.ok(C.phoneMatches('٠١٠٥٥٥١٢٣٤', '0105551234')); assert.ok(C.phoneMatches('+20105551234', '0105551234')); assert.ok(!C.phoneMatches('0105551235', '0105551234')); });
+
+// ---- provider payments (mock) ----
+t('provider payment: pending attempt cannot pay; paid attempt pays and is used once', () => {
+  const db = mk(); const u = db.users[1];
+  const a = C.createProviderPayment(db, { provider: 'paymob', amount: 20 });
+  assert.throws(() => C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)] }, payments: [{ method: 'paymob', amount: 20, attempt: a.id }], user: u }), /PAYMENT_NOT_PAID/);
+  C.settleProviderPayment(db, a.id, 'paid');
+  const s = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)] }, payments: [{ method: 'paymob', amount: 20, attempt: a.id }], user: u });
+  assert.strictEqual(a.usedIn, s.no);
+  assert.throws(() => C.settleProviderPayment(db, a.id, 'failed'), /PAYMENT_USED/);
+  const db2 = mk(); const b = C.createProviderPayment(db2, { provider: 'fawry', amount: 20 }); C.settleProviderPayment(db2, b.id, 'paid');
+  C.finalizeSale(db2, { cart: { lines: [line('a', 'G1', 2, 10)] }, payments: [{ method: 'fawry', amount: 20, attempt: b.id }], user: db2.users[1] });
+  assert.throws(() => C.finalizeSale(db2, { cart: { lines: [line('a', 'G1', 2, 10)] }, payments: [{ method: 'fawry', amount: 20, attempt: b.id }], user: db2.users[1] }), /PAYMENT_USED/); });
+t('provider payment: amount must match the attempt', () => {
+  const db = mk(); const a = C.createProviderPayment(db, { provider: 'paymob', amount: 15 }); C.settleProviderPayment(db, a.id, 'paid');
+  assert.throws(() => C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)] }, payments: [{ method: 'paymob', amount: 20, attempt: a.id }, { method: 'cash', amount: 0 }], user: db.users[1] }), /PAYMENT_AMOUNT/); });
+t('provider payment: split with cash works', () => {
+  const db = mk(); const a = C.createProviderPayment(db, { provider: 'fawry', amount: 12 }); C.settleProviderPayment(db, a.id, 'paid');
+  const s = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 2, 10)] }, payments: [{ method: 'fawry', amount: 12, attempt: a.id }, { method: 'cash', amount: 8 }], user: db.users[1] });
+  assert.strictEqual(s.paid, 20); });
+t('provider payment: unknown provider and bad states are refused', () => {
+  const db = mk(); assert.throws(() => C.createProviderPayment(db, { provider: 'visa', amount: 10 }), /BAD_PROVIDER/);
+  const a = C.createProviderPayment(db, { provider: 'paymob', amount: 10 }); assert.throws(() => C.settleProviderPayment(db, a.id, 'maybe'), /BAD_STATE/); });
+
+// ---- ETA mock queue ----
+t('ETA: every sale queues a receipt with a 64-char fingerprint; submit all accepts it', () => {
+  const db = mk(); const s = C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 1, 10)] }, payments: pay(10), user: db.users[1] });
+  const r = db.etaReceipts.find((x) => x.saleNo === s.no);
+  assert.ok(r && r.state === 'queued' && /^[0-9a-f]{64}$/.test(r.uuid));
+  assert.strictEqual(C.etaSubmitAll(db), 1); assert.strictEqual(r.state, 'accepted'); assert.ok(r.longId);
+  assert.strictEqual(C.etaSubmitAll(db), 0); });
+
+// ---- recount + second manager ----
+const mkClose = (diff) => { const db = mk(); const cashier = db.users[1]; const sh = C.openShift(db, cashier, 100, '');
+  C.finalizeSale(db, { cart: { lines: [line('a', 'G1', 1, 10)] }, payments: pay(10), user: cashier, shiftId: sh.id });
+  C.closeShift(db, sh, 110 + diff, '', { blind: true }); return { db, sh, cashier }; };
+t('recount: send back, cashier re-counts, close waits for approval again', () => {
+  const { db, sh, cashier } = mkClose(5);
+  C.sendBackForRecount(db, sh, db.users[0], 'count again');
+  assert.strictEqual(sh.approval, 'recount');
+  assert.throws(() => C.approveClose(db, sh, db.users[0], ''), /NOT_PENDING/);
+  assert.throws(() => C.recountShift(db, sh, db.users[0], 110), /MANAGER_ONLY/);
+  C.recountShift(db, sh, cashier, 105, 'recounted');
+  assert.strictEqual(sh.approval, 'pending'); assert.strictEqual(sh.countedCash, 105);
+  C.approveClose(db, sh, db.users[0], 'ok'); assert.strictEqual(sh.approval, 'approved'); });
+t('second manager: over the threshold a second approver is required', () => {
+  const { db, sh } = mkClose(50); db.settings.secondApprovalAbove = 20;
+  assert.throws(() => C.approveClose(db, sh, db.users[0], 'big diff'), /SECOND_APPROVAL/);
+  db.users.push(C.makeUser('Boss2', '9999', 'manager'));
+  assert.throws(() => C.approveClose(db, sh, db.users[0], 'big diff', db.users[0]), /SECOND_APPROVAL/);
+  C.approveClose(db, sh, db.users[0], 'big diff', db.users[2]);
+  assert.strictEqual(sh.approval, 'approved'); assert.strictEqual(sh.secondApprovedBy, 'Boss2'); });
+t('second manager: under the threshold one approver is enough', () => {
+  const { db, sh } = mkClose(10); db.settings.secondApprovalAbove = 20;
+  C.approveClose(db, sh, db.users[0], 'small'); assert.strictEqual(sh.approval, 'approved'); assert.ok(!sh.secondApprovedBy); });

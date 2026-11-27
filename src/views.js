@@ -342,8 +342,10 @@ Views.shift = function (m) {
       '<div class="card"><h3>' + t('cashMoves') + '</h3>' + table([t('time'), t('type'), t('amount'), t('reason')], sh.moves.map((x) => '<tr><td>' + fmtDT(x.ts) + '</td><td>' + t(x.kind === 'in' ? 'cashIn' : 'cashOut') + '</td><td>' + money(x.amount) + '</td><td>' + esc(x.reason) + (x.approvedBy ? ' <small>(' + esc(x.approvedBy) + ')</small>' : '') + '</td></tr>')) + '</div>';
   }
   const hist = App.db.shifts.filter((s) => s.closedAt && (can('viewOtherShifts') || s.userId === App.user.id)).slice().reverse().slice(0, 30);
-  m.innerHTML = head(t('nav_shift')) + body + '<div class="card"><h3>' + t('closedShifts') + '</h3>' + table([t('cashier'), t('openedAt'), t('closedAt'), t('expectedCash'), t('countedCash'), t('difference'), ''], hist.map((s) => '<tr><td>' + esc(s.userName) + '</td><td>' + fmtDT(s.openedAt) + '</td><td>' + fmtDT(s.closedAt) + '</td><td>' + (s.approval === 'pending' ? '—' : money(s.expectedCash)) + '</td><td>' + money(s.countedCash) + '</td>' + (s.approval === 'pending' ? '<td colspan="1"><span class="tag w">' + t('pendingApproval') + '</span></td>' : '<td class="' + (Math.abs(s.diff) > 0.009 ? 'bad' : 'good') + '">' + money(s.diff) + '</td>') + '<td>' + (s.approval === 'pending' ? (can('approve') && can('seeExpected') || can('viewOtherShifts') ? '<button class="btn sm primary" data-ap="' + s.id + '">' + t('approveClose') + '</button>' : '') : '<button class="btn sm" data-z="' + s.id + '">🖨 Z</button>') + '</td></tr>')) + '</div>';
+  m.innerHTML = head(t('nav_shift')) + body + '<div class="card"><h3>' + t('closedShifts') + '</h3>' + table([t('cashier'), t('openedAt'), t('closedAt'), t('expectedCash'), t('countedCash'), t('difference'), ''], hist.map((s) => '<tr><td>' + esc(s.userName) + '</td><td>' + fmtDT(s.openedAt) + '</td><td>' + fmtDT(s.closedAt) + '</td><td>' + ((s.approval === 'pending' || s.approval === 'recount') ? '—' : money(s.expectedCash)) + '</td><td>' + money(s.countedCash) + '</td>' + ((s.approval === 'pending' || s.approval === 'recount') ? '<td colspan="1"><span class="tag w">' + t('pendingApproval') + '</span></td>' : '<td class="' + (Math.abs(s.diff) > 0.009 ? 'bad' : 'good') + '">' + money(s.diff) + '</td>') + '<td>' + (s.approval === 'pending' ? (can('approve') && can('seeExpected') || can('viewOtherShifts') ? '<button class="btn sm primary" data-ap="' + s.id + '">' + t('approveClose') + '</button>' : '') : s.approval === 'recount' ? (s.userId === App.user.id ? '<button class="btn sm primary" data-rc="' + s.id + '">' + t('recountBtn') + '</button>' : '') : '<button class="btn sm" data-z="' + s.id + '">🖨 Z</button>') + '</td></tr>')) + '</div>' + etaCardHTML();
   m.onclick = (e) => {
+    if (e.target.hasAttribute('data-eta-all')) { Core.etaSubmitAll(App.db); save(true).then(() => Views.shift($('#main'))); return; }
+    const rc2 = e.target.closest('[data-rc]'); if (rc2) return recountModal(App.db.shifts.find((x) => x.id === rc2.dataset.rc));
     if (e.target.id === 'sh-open') openShiftModal(); if (e.target.id === 'sh-in') cashMoveModal('in'); if (e.target.id === 'sh-out') cashMoveModal('out'); if (e.target.id === 'sh-close') closeShiftModal();
     const ap = e.target.closest('[data-ap]'); if (ap) return approveCloseModal(App.db.shifts.find((x) => x.id === ap.dataset.ap));
     const z = e.target.closest('[data-z]'); if (z) printZ(App.db.shifts.find((x) => x.id === z.dataset.z));
@@ -538,11 +540,38 @@ function printerCardHTML() {
     '<div class="row"><button class="btn primary" id="pr-save">' + t('save') + '</button><button class="btn" id="pr-test">🖨 ' + sb('اطبع صفحة اختبار', 'Print test page') + '</button><button class="btn" id="pr-drawer">🗄 ' + sb('افتح الدرج', 'Open drawer') + '</button></div><p id="pr-out" class="muted"></p></div>';
 }
 
+function etaCardHTML() {
+  if (!can('viewOtherShifts')) return '';
+  const all = App.db.etaReceipts || [];
+  const rows = all.slice().reverse().slice(0, 50);
+  const queued = all.filter((x) => x.state === 'queued').length;
+  return '<div class="card"><h3>' + t('etaTitle') + '</h3><p class="muted sm">' + t('etaHelp') + '</p>' +
+    (!rows.length ? '<p class="muted">' + t('etaNone') + '</p>' :
+      (queued ? '<p><button class="btn" data-eta-all>' + t('etaSendAll') + ' (' + queued + ')</button></p>' : '') +
+      table([t('rcInvoice'), t('total'), t('state')], rows.map((x) => '<tr><td>' + esc(x.saleNo) + '</td><td>' + money(x.total) + '</td><td>' + t('etaState_' + x.state) + (x.longId ? ' <small class="muted">' + esc(x.longId) + '</small>' : '') + '</td></tr>'))) + '</div>';
+}
+async function recountModal(sh) {
+  const m = modal({ title: t('recountTitle') + ' · ' + fmtDT(sh.closedAt),
+    body: (sh.recountNote ? '<p class="muted">' + esc(sh.recountNote) + '</p>' : '') + form([{ k: 'counted', label: t('countedCash'), type: 'number', step: 'any' }, { k: 'note', label: t('note') }]),
+    buttons: [{ label: t('cancel') }, { label: t('recountBtn'), cls: 'primary', onClick: async (w) => {
+      const v = readForm(w, [{ k: 'counted', type: 'number' }, { k: 'note' }]);
+      try { Core.recountShift(App.db, sh, App.user, v.counted, v.note); await save(true); toast(t('recountDone')); Views.shift($('#main')); } catch (er) { toast(errMsg(er), 'err'); return false; } } }], enter: 1 });
+}
 async function approveCloseModal(sh) {
   let ap = App.user;
   if (!(Core.isApprover(App.db, ap) && Core.can(App.db, ap, 'seeExpected'))) { ap = await managerApproval(t('approveCloseQ', { n: sh.userName })); if (!ap || !Core.can(App.db, ap, 'seeExpected')) return; }
   let view; try { view = Core.pendingCloseView(App.db, sh); } catch (e) { return toast(errMsg(e), 'err'); }
   const m = modal({ title: t('approveClose') + ' · ' + sh.userName, body: '<div class="stats">' + stat(t('expectedCash'), money(view.expectedCash)) + stat(t('countedCash'), money(view.countedCash)) + stat(t('difference'), '<span class="' + (Math.abs(view.diff) > 0.009 ? 'bad' : 'good') + '">' + money(view.diff) + '</span>') + '</div>' + (sh.note ? '<p class="muted">' + esc(sh.note) + '</p>' : '') + '<div class="grid2">' + form([{ k: 'note', label: t('note') }]) + '</div>',
-    buttons: [{ label: t('cancel') }, { label: t('approve'), cls: 'primary', onClick: async (w) => {
-      try { Core.approveClose(App.db, sh, ap, readForm(w, [{ k: 'note' }]).note); await save(true); Views.shift($('#main')); printZ(sh); } catch (er) { toast(errMsg(er), 'err'); return false; } } }], enter: 0 });
+    buttons: [{ label: t('cancel') }, { label: t('sendBack'), onClick: async (w) => {
+      try { Core.sendBackForRecount(App.db, sh, ap, readForm(w, [{ k: 'note' }]).note); await save(true); toast(t('sentBack')); Views.shift($('#main')); } catch (er) { toast(errMsg(er), 'err'); return false; } } },
+      { label: t('approve'), cls: 'primary', onClick: async (w) => {
+      const note = readForm(w, [{ k: 'note' }]).note;
+      try { Core.approveClose(App.db, sh, ap, note); }
+      catch (er) {
+        if (!/SECOND_APPROVAL/.test(String(er && er.message))) { toast(errMsg(er), 'err'); return false; }
+        const ap2 = await managerApproval(t('secondApprovalQ'));
+        if (!ap2) return false;
+        try { Core.approveClose(App.db, sh, ap, note, ap2); } catch (er2) { toast(errMsg(er2), 'err'); return false; }
+      }
+      await save(true); Views.shift($('#main')); printZ(sh); } }], enter: 0 });
 }
