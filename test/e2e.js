@@ -33,7 +33,7 @@ app.whenReady().then(async () => {
     check('continue is disabled until the key is acknowledged', await ev(`return document.querySelector('#sec-continue').disabled===true`));
     await click('#sec-saved'); await click('#sec-continue'); await sleep(800);
     // 1. wizard (Arabic default)
-    await ev(`document.querySelector('[data-lang="ar"]')&&document.querySelector('[data-lang="ar"]').click()`);
+    await ev(`const b=document.querySelector('[data-lang="${EN ? 'en' : 'ar'}"]'); if(b) b.click(); return 1`);
     await setv('[name=storeName]', 'سوبر ماركت النور'); await setv('[name=name]', 'مدير'); await setv('[name=pin]', '1234'); await shot('01-wizard-ar');
     await click('#wiz-go'); await sleep(400);
     check('wizard created manager', await ev(`return App.db.users.length===1 && App.db.users[0].role==='system'`));
@@ -198,8 +198,11 @@ app.whenReady().then(async () => {
     await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
     await click('[data-ap]'); await sleep(400); await shot('47-manager-approves-close-ar');
     check('approver sees expected vs counted vs difference', await ev(`const tx=document.querySelector('.modal-wrap').textContent; return tx.includes('58') && tx.includes('55')`));
-    await setv('[name=note]', 'عدّ تاني ونقص 3'); await modalBtn(2); await sleep(600);
-    check('after approval the close is final with expected and difference', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='approved' && s.expectedCash===58 && s.diff===-3 && s.approvedBy==='Mona'`));
+    await setv('[name=note]', 'عدّ تاني ونقص 3'); await modalBtn(2);
+    // CI runners are slower than a dev machine: poll for the final state instead of one fixed sleep
+    let apv = null; for (let i = 0; i < 20; i++) { await sleep(300); apv = await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return {a:s.approval,e:s.expectedCash,d:s.diff,by:s.approvedBy,err:(document.querySelector('.modal-wrap .err')||{}).textContent||''}`); if (apv.a === 'approved') break; }
+    if (!apv || apv.a !== 'approved') console.log('APPROVE-DIAG', JSON.stringify(apv));
+    check('after approval the close is final with expected and difference', apv && apv.a === 'approved' && apv.e === 58 && apv.d === -3 && apv.by === 'Mona');
     await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
     await ev(`App.user=App._sys; shell(); Views.settings($('#main')); return 1`); await sleep(500);
     await ev(`document.getElementById('perm-card').scrollIntoView(); return 1`); await shot('41-permission-matrix-ar');
