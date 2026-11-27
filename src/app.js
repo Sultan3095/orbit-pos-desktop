@@ -384,7 +384,9 @@ const Sell = {
     if (!App.cart.lines.length) { if (!(App.user && App.user.guideOff) && !Guide.seen(App.user, 'EMPTY_CART')) { const q = $('#q'); if (q) Guide.show('EMPTY_CART', q); } return; }
     if (!App.shift) { if (!(App.user && App.user.guideOff) && !Guide.seen(App.user, 'SHIFT_CLOSED')) { const b = $('#s-open'); if (b) { Guide.show('SHIFT_CLOSED', b); return; } } return openShiftModal(); }
     const r = this.calc(); if (r.total < 0) return;
-    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'cref', label: t('cardRef') }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }, { k: 'gc', label: t('giftUseNo') }, { k: 'gca', label: t('giftUseAmt'), type: 'number', step: 'any' }];
+    const custL = App.cart.customerId ? App.db.customers.find((x) => x.id === App.cart.customerId) : null;
+    const fields = [{ k: 'cash', label: t('cash'), type: 'number', step: 'any' }, { k: 'card', label: t('card'), type: 'number', step: 'any' }, { k: 'cref', label: t('cardRef') }, { k: 'other', label: t('otherPay'), type: 'number', step: 'any' }, { k: 'paymob', label: t('pm_paymob'), type: 'number', step: 'any' }, { k: 'fawry', label: t('pm_fawry'), type: 'number', step: 'any' }, { k: 'xr', label: t('exrNo') }, { k: 'gc', label: t('giftUseNo') }, { k: 'gca', label: t('giftUseAmt'), type: 'number', step: 'any' }];
+    if (custL && App.db.settings.loyaltyEnabled && Core.phoneDigits(custL.phone)) fields.push({ k: 'lphone', label: t('loyaltyPhone') });
     const quick = [r.total, 50, 100, 200, 500].filter((v, i, a) => v > 0 && a.indexOf(v) === i);
     const cust = App.cart.customerId ? App.db.customers.find((x) => x.id === App.cart.customerId) : null;
     modal({ title: t('pay'), cls: 'wide', body: '<div class="paytot">' + t('total') + ': <b>' + money(r.total) + ' ' + esc(cur()) + '</b></div><div class="grid3">' + form(fields) + '</div>' +
@@ -392,10 +394,10 @@ const Sell = {
       (cust && App.db.settings.loyaltyEnabled ? '<label class="chk"><input type="checkbox" id="redeem"' + (App.cart.redeem ? ' checked' : '') + '> ' + t('redeemPoints', { n: cust.points || 0 }) + '</label>' : ''),
       buttons: [{ label: t('cancel') }, { label: t('completeSale'), cls: 'primary', onClick: (w) => doPay(w, fields) }], enter: 1,
       onOpen: (w) => {
-        const upd = () => { const v = readForm(w, fields); let cr = 0; try { if (v.xr) cr = Math.min(Core.checkExchangeReceipt(App.db, v.xr).amount, r.total); } catch (e) {} let gv = 0; try { if (v.gc) gv = Math.min(Core.checkGiftCard(App.db, v.gc).balance, Core.r2(r.total - cr), v.gca > 0 ? v.gca : Infinity); } catch (e) {} const paid = (v.cash || 0) + (v.card || 0) + (v.other || 0) + cr + gv; const rem = Core.r2(r.total - paid);
+        const upd = () => { const v = readForm(w, fields); let cr = 0; try { if (v.xr) cr = Math.min(Core.checkExchangeReceipt(App.db, v.xr).amount, r.total); } catch (e) {} let gv = 0; try { if (v.gc) gv = Math.min(Core.checkGiftCard(App.db, v.gc).balance, Core.r2(r.total - cr), v.gca > 0 ? v.gca : Infinity); } catch (e) {} const paid = (v.cash || 0) + (v.card || 0) + (v.other || 0) + (v.paymob || 0) + (v.fawry || 0) + cr + gv; const rem = Core.r2(r.total - paid);
           $('#paystat', w).innerHTML = rem > 0.004 ? '<span class="bad">' + t('remaining') + ': ' + money(rem) + '</span>' : '<span class="good">' + t('change') + ': ' + money(-rem) + '</span>'; if (gv > 0) $('#paystat', w).innerHTML += ' · ' + t('giftCovers') + ': ' + money(gv); };
         w.addEventListener('input', (e) => { if (e.target.id === 'redeem') { App.cart.redeem = e.target.checked; w.close(); Sell.renderCart(); Sell.pay(); return; } upd(); });
-        w.addEventListener('click', (e) => { if (e.target.dataset.q) { $('[name=cash]', w).value = e.target.dataset.q; $('[name=card]', w).value = ''; $('[name=other]', w).value = ''; upd(); } if (e.target.hasAttribute('data-card-all')) { $('[name=card]', w).value = r.total; $('[name=cash]', w).value = ''; $('[name=other]', w).value = ''; upd(); } });
+        w.addEventListener('click', (e) => { if (e.target.dataset.q) { $('[name=cash]', w).value = e.target.dataset.q; $('[name=card]', w).value = ''; $('[name=other]', w).value = ''; $('[name=paymob]', w).value = ''; $('[name=fawry]', w).value = ''; upd(); } if (e.target.hasAttribute('data-card-all')) { $('[name=card]', w).value = r.total; $('[name=cash]', w).value = ''; $('[name=other]', w).value = ''; $('[name=paymob]', w).value = ''; $('[name=fawry]', w).value = ''; upd(); } });
         const cashEl = $('[name=cash]', w); cashEl.focus(); upd();
       } });
   },
@@ -404,17 +406,44 @@ async function doPay(w, fields) {
   const v = readForm(w, fields);
   const xrNo = (v.xr || '').trim();
   const payments = [{ method: 'cash', amount: v.cash || 0 }, { method: 'card', amount: v.card || 0, ref: (v.cref || '').trim() }, { method: 'other', amount: v.other || 0 }].filter((p) => p.amount > 0);
+  // provider tenders: each becomes a mock attempt the cashier confirms before the sale completes
+  for (const prov of ['paymob', 'fawry']) {
+    if ((v[prov] || 0) > 0) {
+      const att = Core.createProviderPayment(App.db, { provider: prov, amount: v[prov] });
+      const okd = await providerConfirmModal(att);
+      if (!okd) { await save(true); return false; }
+      payments.push({ method: prov, amount: v[prov], attempt: att.id });
+    }
+  }
   const c = App.cart; const r = Sell.calc(); const cust = c.customerId ? App.db.customers.find((x) => x.id === c.customerId) : null;
-  try {
+  const finish = async (loyaltyApprover) => {
     const sale = Core.finalizeSale(App.db, { cart: { lines: c.lines.map((l) => { const it = App.db.items.find((x) => x.id === l.itemId); return Object.assign({}, l, { group: it.group, taxExempt: it.taxExempt }); }), invPct: c.invPct, invAmt: c.invAmt, redeemValue: r.redeemValue, coupon: c.couponCode ? { code: c.couponCode } : undefined },
-      payments, exchangeReceiptNo: xrNo || undefined, giftCardNo: (v.gc || '').trim() || undefined, giftAmount: v.gca > 0 ? v.gca : undefined, user: App.user, shiftId: App.shift.id, customerId: c.customerId, customerName: cust ? cust.name : '', profileName: App.shift.profileName });
+      payments, exchangeReceiptNo: xrNo || undefined, giftCardNo: (v.gc || '').trim() || undefined, giftAmount: v.gca > 0 ? v.gca : undefined, user: App.user, shiftId: App.shift.id, customerId: c.customerId, customerName: cust ? cust.name : '', profileName: App.shift.profileName, loyaltyPhone: (v.lphone || '').trim(), loyaltyApprover: loyaltyApprover || undefined });
     if (c.approvedBy) sale.approvedBy = c.approvedBy;
     await save(true);
     if (App.db.settings.printer && App.db.settings.printer.drawerOnCash && App.db.settings.printer.type !== 'system' && sale.payments.some((p) => p.method === 'cash')) { try { window.api.openDrawer(App.db.settings.printer); } catch (e) {} }
     App.cart = newCart(); Sell.renderCart();
     try { window.api.updateDisplay({ thanks: true, lang: lang(), theme: Core.themeOf(App.db.settings, App.user), total: sale.total, currency: cur(), change: sale.change }); } catch (e) {}
     showReceiptDone(sale);
-  } catch (e) { toast(errMsg(e), 'err'); return false; }
+  };
+  try { await finish(null); }
+  catch (e) {
+    if (!/LOYALTY_PHONE/.test(String(e && e.message))) { toast(errMsg(e), 'err'); return false; }
+    const ap = await managerApproval(t('loyaltyOverrideQ'));
+    if (!ap) return false;
+    try { await finish(ap); } catch (e2) { toast(errMsg(e2), 'err'); return false; }
+  }
+}
+function providerConfirmModal(att) {
+  // Mock provider step: the desktop app is offline, so the "provider" is a confirm dialog.
+  return new Promise((res) => {
+    let done = false;
+    const m = modal({ title: Core.PROVIDER_METHODS[att.provider] + ' · ' + money(att.amount) + ' ' + esc(cur()),
+      body: '<p class="muted">' + t('provWaiting') + '</p>',
+      buttons: [{ label: t('provFailedBtn'), onClick: () => { done = true; Core.settleProviderPayment(App.db, att.id, 'failed'); res(false); } },
+        { label: t('provPaidBtn'), cls: 'primary', onClick: () => { done = true; Core.settleProviderPayment(App.db, att.id, 'paid'); res(true); } }], enter: 1,
+      onCancel: () => { if (!done) { try { Core.settleProviderPayment(App.db, att.id, 'failed'); } catch (e) {} res(false); } } });
+  });
 }
 function showReceiptDone(sale) {
   const m = modal({ title: t('saleDone') + ' ' + sale.no, body: '<div class="paytot">' + t('total') + ': <b>' + money(sale.total) + '</b></div>' + (sale.change > 0 ? '<div class="paytot good">' + t('change') + ': <b>' + money(sale.change) + '</b></div>' : ''),

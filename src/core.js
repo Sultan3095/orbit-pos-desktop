@@ -56,6 +56,7 @@
       costMethod: 'average', // 'average' | 'last'
       receiptWidth: 80, autoPrint: false,
       loyaltyEnabled: false, loyaltyEarnPerCurrency: 10, loyaltyPointValue: 0.5,
+      secondApprovalAbove: 0, // 0 = off; above this close difference a second manager must approve
       slowDays: 30, lowStockDefault: 5, printer: { type: 'system', host: '', port: 9100, path: '', width: 80, drawerOnCash: false, drawerPin: 0, cut: true },
       expiryWarnDays: 30,
       scaleMode: 'manual', scalePrefix: '2', // weight barcode prefix
@@ -533,6 +534,27 @@
       giftAmt = r2(Math.min(gift.balance, r2(calc.total - credit), input.giftAmount > 0 ? input.giftAmount : Infinity));
       if (giftAmt > 0) input = Object.assign({}, input, { payments: input.payments.concat([{ method: 'gift', amount: giftAmt }]) });
     }
+    // redeeming loyalty points needs the customer's own phone; a manager approves an override
+    let loyaltyOverride = '';
+    if (calc.redeemValue > 0 && input.customerId) {
+      const custL = db.customers.find((x) => x.id === input.customerId);
+      if (custL && Core.phoneDigits(custL.phone) && !Core.phoneMatches(input.loyaltyPhone, custL.phone)) {
+        const appr = input.loyaltyApprover;
+        if (!(appr && Core.isApprover(db, appr))) throw new Error('LOYALTY_PHONE');
+        loyaltyOverride = appr.name;
+      }
+    }
+    // provider payments (Paymob / Fawry, mock on the desktop): each needs a paid attempt, used once, amount exact
+    const usedAttempts = [];
+    (input.payments || []).forEach((p) => {
+      if (!Core.PROVIDER_METHODS[p.method]) return;
+      const a = (db.paymentAttempts || []).find((x) => x.id === p.attempt);
+      if (!a || a.provider !== p.method) throw new Error('PAYMENT_MISSING');
+      if (a.state !== 'paid') throw new Error('PAYMENT_NOT_PAID');
+      if (a.usedIn) throw new Error('PAYMENT_USED');
+      if (Math.abs(a.amount - p.amount) > 0.004) throw new Error('PAYMENT_AMOUNT');
+      usedAttempts.push(a);
+    });
     const paid = r2((input.payments || []).reduce((t, p) => t + (p.amount || 0), 0));
     const cash = r2((input.payments || []).filter((p) => p.method === 'cash').reduce((t, p) => t + p.amount, 0));
     const nonCash = r2(paid - cash);
@@ -564,6 +586,7 @@
       customerId: input.customerId || null, customerName: input.customerName || '',
       lines: [], gross: calc.gross, lineDisc: calc.lineDisc, invoiceDisc: calc.invoiceDisc,
       redeemValue: calc.redeemValue, invoicePromoNames: calc.invoicePromoNames,
+      loyaltyPhoneOverride: loyaltyOverride,
       subtotal: calc.subtotal, tax: calc.tax, total: calc.total,
       payments: (input.payments || []).filter((p) => p.amount > 0), paid, change,
       profileName: input.profileName || '', status: 'completed', returned: {},
@@ -606,6 +629,12 @@
       const left = r2(xr.amount - credit);
       if (left > 0.004) sale.newExchangeReceipt = Core.issueExchangeReceipt(db, left, { expiresOn: xr.expiresOn, customerName: xr.customerName || '', splitFrom: xr.no }, now).no;
     }
+    usedAttempts.forEach((a) => { a.usedIn = sale.no; });
+    // ETA e-receipt queue (mock): every sale gets a receipt with a content fingerprint; "sending" is simulated
+    db.etaReceipts = db.etaReceipts || [];
+    const eta = { id: Core.uid('eta'), no: 'ETA-' + String((db.counters.eta = (db.counters.eta || 0) + 1)).padStart(5, '0'),
+      saleNo: sale.no, ts: sale.ts, total: sale.total, state: 'queued', uuid: Core.etaFingerprint(sale), longId: '' };
+    db.etaReceipts.push(eta); sale.etaReceipt = eta.no;
     db.sales.push(sale);
     return sale;
   };
@@ -930,13 +959,89 @@
     return rows.map((r, i) => ({ id: Core.uid('it'), barcode: '200000000' + String(i + 1).padStart(4, '0'), name: r[1], nameEn: r[0], group: r[2], unit: '', cost: r[3], price: r[4], stock: r[5], minStock: 10, batches: [], serials: [], active: true, demo: true }));
   };
   Core.pendingCloseView = function (db, shift) { if (shift.approval !== 'pending') throw new Error('NOT_PENDING'); return { expectedCash: shift._sealed.expectedCash, countedCash: shift.countedCash, diff: shift._sealed.diff, closedBy: shift.userName, closedAt: shift.closedAt }; };
-  Core.approveClose = function (db, shift, approver, note) {
+  Core.approveClose = function (db, shift, approver, note, secondApprover) {
     if (shift.approval !== 'pending') throw new Error('NOT_PENDING');
     if (!Core.isApprover(db, approver) || !Core.can(db, approver, 'seeExpected')) throw new Error('MANAGER_ONLY');
     if (approver.id === shift.userId) throw new Error('SELF_APPROVE');
     const sealed = shift._sealed; if (Math.abs(sealed.diff) > 0.009 && !String(note || '').trim() && !shift.note) throw new Error('DIFF_NOTE');
+    const threshold = Core.num(db.settings.secondApprovalAbove) || 0;
+    if (threshold > 0 && Math.abs(sealed.diff) > threshold) {
+      if (!secondApprover || !Core.isApprover(db, secondApprover)) throw new Error('SECOND_APPROVAL');
+      if (secondApprover.id === approver.id || secondApprover.id === shift.userId) throw new Error('SECOND_APPROVAL');
+      shift.secondApprovedBy = secondApprover.name;
+    }
     shift.expectedCash = sealed.expectedCash; shift.diff = sealed.diff; shift.summary = sealed.summary; delete shift._sealed;
     shift.approval = 'approved'; shift.approvedBy = approver.name; shift.approvedAt = new Date().toISOString(); shift.approvalNote = String(note || '').trim();
+    return shift;
+  };
+
+  // ---------- loyalty phone protection ----------
+  Core.phoneDigits = function (s) { return Core.normDigits(s == null ? '' : s).replace(/\D/g, ''); };
+  Core.phoneMatches = function (a, b) {
+    const x = Core.phoneDigits(a), y = Core.phoneDigits(b);
+    if (!x || !y) return false;
+    return x === y || (x.length >= 9 && y.length >= 9 && x.slice(-9) === y.slice(-9));
+  };
+
+  // ---------- provider payments (mock) ----------
+  Core.PROVIDER_METHODS = { paymob: 'Paymob', fawry: 'Fawry' };
+  Core.createProviderPayment = function (db, input, now) {
+    // Mock attempt for a provider payment. The desktop app is offline, so this mirrors the provider
+    // flow for training and testing; the real charge runs on the server side (ERPNext).
+    const provider = String((input && input.provider) || '');
+    if (!Core.PROVIDER_METHODS[provider]) throw new Error('BAD_PROVIDER');
+    const amount = Core.num(input.amount);
+    if (!(amount > 0)) throw new Error('BAD_AMOUNT');
+    db.paymentAttempts = db.paymentAttempts || [];
+    const a = { id: Core.uid('pay'), no: 'PAY-' + String((db.counters.pay = (db.counters.pay || 0) + 1)).padStart(5, '0'),
+      provider, amount: r2(amount), state: 'pending', ts: (now || new Date()).toISOString(), usedIn: '' };
+    db.paymentAttempts.push(a);
+    return a;
+  };
+  Core.settleProviderPayment = function (db, id, state) {
+    const a = (db.paymentAttempts || []).find((x) => x.id === id);
+    if (!a) throw new Error('PAYMENT_MISSING');
+    if (['paid', 'failed', 'expired', 'refunded'].indexOf(state) < 0) throw new Error('BAD_STATE');
+    if (a.usedIn) throw new Error('PAYMENT_USED');
+    a.state = state; return a;
+  };
+
+  // ---------- ETA e-receipts (mock queue) ----------
+  Core.etaFingerprint = function (sale) {
+    const body = [sale.no, sale.ts, sale.total].join('|');
+    if (typeof require === 'function') { try { return require('crypto').createHash('sha256').update(body).digest('hex'); } catch (e) {} }
+    // renderer fallback: a stable non-crypto fingerprint is enough for the mock queue
+    let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+    for (let i = 0; i < body.length; i++) { const ch = body.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    const hex = (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+    return hex.repeat(4).slice(0, 64);
+  };
+  Core.etaSubmit = function (db, id) {
+    const r = (db.etaReceipts || []).find((x) => x.id === id);
+    if (!r) throw new Error('ETA_MISSING');
+    if (r.state === 'queued' || r.state === 'rejected') { r.state = 'accepted'; r.longId = 'MOCK-' + r.no; }
+    return r;
+  };
+  Core.etaSubmitAll = function (db) { let n = 0; (db.etaReceipts || []).forEach((r) => { if (r.state === 'queued' || r.state === 'rejected') { Core.etaSubmit(db, r.id); n++; } }); return n; };
+
+  // ---------- close recount ----------
+  Core.sendBackForRecount = function (db, shift, approver, note) {
+    if (shift.approval !== 'pending') throw new Error('NOT_PENDING');
+    if (!Core.isApprover(db, approver) || !Core.can(db, approver, 'seeExpected')) throw new Error('MANAGER_ONLY');
+    if (approver.id === shift.userId) throw new Error('SELF_APPROVE');
+    shift.approval = 'recount'; shift.recountNote = String(note || '').trim();
+    return shift;
+  };
+  Core.recountShift = function (db, shift, user, countedCash, note) {
+    if (shift.approval !== 'recount') throw new Error('NOT_RECOUNT');
+    if (shift.userId !== user.id) throw new Error('MANAGER_ONLY');
+    if (!Number.isFinite(countedCash) || countedCash < 0) throw new Error('BAD_PAYMENT');
+    shift.countedCash = r2(countedCash);
+    if (note && String(note).trim()) shift.note = (shift.note ? shift.note + ' | ' : '') + String(note).trim();
+    shift._sealed.diff = r2(countedCash - shift._sealed.expectedCash);
+    shift.approval = 'pending';
     return shift;
   };
 

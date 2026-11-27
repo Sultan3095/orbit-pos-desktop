@@ -140,6 +140,37 @@ var I18N = { en: {}, ar: {} };
 ['err_GIFT_BAD_QTY','Quantity must be 1 to 500','العدد من 1 لـ 500'],
 ['err_GIFT_PRINTED_VALUE','This printed card has a different value than the amount entered','الكارت المطبوع قيمته مختلفة عن المبلغ المكتوب']
   ];
+  rows.push(
+    ['err_LOYALTY_PHONE', "Using points needs the customer's own phone number. A manager can approve an exception.", 'استخدام النقاط محتاج تليفون العميل نفسه. المدير يقدر يوافق كاستثناء.'],
+    ['err_PAYMENT_MISSING', 'Payment attempt not found.', 'عملية الدفع مش موجودة.'],
+    ['err_PAYMENT_NOT_PAID', 'This payment is not confirmed yet.', 'الدفع ده لسه مش متأكد.'],
+    ['err_PAYMENT_USED', 'This payment was already used on another invoice.', 'الدفع ده اتستخدم في فاتورة تانية.'],
+    ['err_PAYMENT_AMOUNT', 'The amount does not match the confirmed payment.', 'المبلغ مختلف عن الدفع المتأكد.'],
+    ['err_BAD_PROVIDER', 'Unknown payment provider.', 'طريقة دفع غير معروفة.'],
+    ['err_BAD_STATE', 'Unknown payment state.', 'حالة دفع غير معروفة.'],
+    ['err_ETA_MISSING', 'Tax receipt not found.', 'الإيصال الضريبي مش موجود.'],
+    ['err_NOT_RECOUNT', 'This close is not waiting for a recount.', 'القفل ده مش مستني إعادة عدّ.'],
+    ['err_SECOND_APPROVAL', 'The difference is large: a second manager must approve.', 'الفرق كبير: لازم اعتماد مدير تاني.'],
+    ['pm_paymob', 'Paymob', 'باي موب'], ['pm_fawry', 'Fawry', 'فوري'],
+    ['provWaiting', 'Waiting for the customer to pay (demo).', 'مستنيين العميل يدفع (تجريبي).'],
+    ['provPaidBtn', 'Customer paid (demo confirm)', 'العميل دفع (تأكيد تجريبي)'],
+    ['provFailedBtn', 'Payment failed', 'الدفع فشل'],
+    ['loyaltyPhone', "Customer's phone (points)", 'تليفون العميل (النقاط)'],
+    ['loyaltyOverrideQ', 'Manager approval to use points without the customer phone', 'موافقة المدير لاستخدام النقاط بدون تليفون العميل'],
+    ['sendBack', 'Send back for recount', 'ارجعها للعدّ تاني'],
+    ['sentBack', 'Sent back to the cashier for a recount.', 'اترجعت للكاشير للعدّ تاني.'],
+    ['secondApprovalQ', 'Second manager approval for the large difference', 'اعتماد المدير التاني للفرق الكبير'],
+    ['recountBtn', 'Recount', 'عدّ تاني'],
+    ['recountTitle', 'Recount the drawer', 'عدّ الدرج تاني'],
+    ['recountDone', 'New count saved. Waiting for manager approval.', 'العدّ الجديد اتسجل. بانتظار اعتماد المدير.'],
+    ['etaTitle', 'ETA tax receipts (mock queue)', 'إيصالات الضرائب (طابور تجريبي)'],
+    ['etaHelp', 'Every sale queues a tax receipt here. Sending is simulated in this app; the real submission runs on the server.', 'كل عملية بيع بتضيف إيصال ضريبي هنا. الإرسال تجريبي في البرنامج ده، والإرسال الحقيقي بيتم على السيرفر.'],
+    ['etaSendAll', 'Send queued (demo)', 'إرسال المعلّق (تجريبي)'],
+    ['etaNone', 'No receipts yet', 'مفيش إيصالات لسه'],
+    ['etaState_queued', 'Queued', 'في الانتظار'], ['etaState_accepted', 'Accepted', 'مقبول'], ['etaState_rejected', 'Rejected', 'مرفوض'],
+    ['secondApprovedBy', 'Second approver', 'المدير التاني'],
+    ['state', 'State', 'الحالة'],
+  );
   rows.forEach((r) => { I18N.en[r[0]] = r[1]; I18N.ar[r[0]] = r[2]; });
 })();
 if (typeof module !== 'undefined') module.exports = I18N;

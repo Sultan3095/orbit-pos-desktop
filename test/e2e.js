@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('fs'); const os = require('os'); const path = require('path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-e2e-')); process.env.ORBIT_USER_DATA = tmp;
 const OUT = process.env.E2E_OUT || path.join(tmp, 'shots'); fs.mkdirSync(OUT, { recursive: true });
+const EN = process.env.E2E_LANG === 'en'; // capture pass language: default Arabic, E2E_LANG=en for the English set
 app.commandLine.appendSwitch('no-sandbox'); app.commandLine.appendSwitch('disable-gpu');
 require('../main.js');
 let importRows = null; const printed = [];
@@ -32,13 +33,14 @@ app.whenReady().then(async () => {
     check('continue is disabled until the key is acknowledged', await ev(`return document.querySelector('#sec-continue').disabled===true`));
     await click('#sec-saved'); await click('#sec-continue'); await sleep(800);
     // 1. wizard (Arabic default)
-    await ev(`document.querySelector('[data-lang="ar"]')&&document.querySelector('[data-lang="ar"]').click()`);
+    await ev(`const b=document.querySelector('[data-lang="${EN ? 'en' : 'ar'}"]'); if(b) b.click(); return 1`);
     await setv('[name=storeName]', 'سوبر ماركت النور'); await setv('[name=name]', 'مدير'); await setv('[name=pin]', '1234'); await shot('01-wizard-ar');
     await click('#wiz-go'); await sleep(400);
     check('wizard created manager', await ev(`return App.db.users.length===1 && App.db.users[0].role==='system'`));
     // login
     await click('[data-u]'); await setv('#pin', '1234'); await click('#pin-go'); await sleep(400);
     check('logged in, sell view', await ev(`return !!document.querySelector('.sell') && App.user.name==='مدير'`));
+    if (EN) { await ev(`App.db.settings.lang='en'; applyTheme(); shell(); return 1`); await sleep(400); }
     await shot('02-sell-empty-ar');
     // 2. add items via UI
     await click('[data-nav=items]'); await sleep(600);
@@ -105,7 +107,7 @@ app.whenReady().then(async () => {
     check('receipt EN ltr + English item name', en.includes('dir="ltr"') && en.includes('Sales invoice') && en.includes('Chips'));
     fs.writeFileSync(path.join(OUT, 'receipt-ar.html'), ar); fs.writeFileSync(path.join(OUT, 'receipt-en.html'), en);
     // 10. switch UI to English + dark + blue
-    await click('#b-lang'); await sleep(300); check('UI switched to LTR/EN', await ev(`return document.documentElement.dir==='ltr' && document.querySelector('.nav.on').textContent.includes('Reports')`));
+    await click('#b-lang'); await sleep(300); check(EN ? 'UI switched to RTL/AR' : 'UI switched to LTR/EN', await ev(EN ? `return document.documentElement.dir==='rtl' && document.querySelector('.nav.on').textContent.includes('تقارير')` : `return document.documentElement.dir==='ltr' && document.querySelector('.nav.on').textContent.includes('Reports')`));
     await click('[data-nav=sell]'); await sleep(200); await shot('15-sell-en-light');
     check('default theme is the brand theme', await ev(`return document.documentElement.getAttribute('data-theme')==='brand'`));
     await shot('16-sell-en-brand');
@@ -120,7 +122,7 @@ app.whenReady().then(async () => {
     await click('[data-nav=settings]'); await sleep(300); await shot('18-settings-en-brand');
 
     // 12. cashier flow: approval above max discount, hold/resume, serial item, weighed item via scale barcode
-    await ev(`App.db.users.push(Core.makeUser('Sara','1111','cashier')); App.db.items.push({id:'sn1',barcode:'8001',name:'Phone',nameEn:'Phone',group:'Electronics',cost:100,price:200,stock:2,minStock:1,serialTracked:true,serials:['IMEI1','IMEI2'],batches:[],created:'2026-01-01T00:00:00Z'},{id:'wt1',barcode:'123',plu:'123',name:'Tomatoes',nameEn:'Tomatoes',group:'Veg',cost:10,price:20,stock:50,minStock:1,byWeight:true,batches:[],serials:[],created:'2026-01-01T00:00:00Z'}); App.db.settings.lang='ar'; applyTheme(); login(); return 1`);
+    await ev(`App.db.users.push(Core.makeUser('Sara','1111','cashier')); App.db.items.push({id:'sn1',barcode:'8001',name:'Phone',nameEn:'Phone',group:'Electronics',cost:100,price:200,stock:2,minStock:1,serialTracked:true,serials:['IMEI1','IMEI2'],batches:[],created:'2026-01-01T00:00:00Z'},{id:'wt1',barcode:'123',plu:'123',name:'Tomatoes',nameEn:'Tomatoes',group:'Veg',cost:10,price:20,stock:50,minStock:1,byWeight:true,batches:[],serials:[],created:'2026-01-01T00:00:00Z'}); App.db.settings.lang='${EN ? 'en' : 'ar'}'; applyTheme(); login(); return 1`);
     await sleep(300); await ev(`[...document.querySelectorAll('[data-u]')].find(b=>b.textContent.includes('Sara')).click()`); await setv('#pin', '1111'); await click('#pin-go'); await sleep(300);
     check('cashier cannot see manager screens', await ev(`return !document.querySelector('[data-nav=settings]') && !!document.querySelector('[data-nav=sell]')`));
     await click('[data-nav=shift]'); await sleep(150); await click('#sh-open'); await sleep(150); await setv('[name=cash]', 50); await modalBtn(1); await sleep(200); await click('[data-nav=sell]'); await sleep(200);
@@ -196,8 +198,11 @@ app.whenReady().then(async () => {
     await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
     await click('[data-ap]'); await sleep(400); await shot('47-manager-approves-close-ar');
     check('approver sees expected vs counted vs difference', await ev(`const tx=document.querySelector('.modal-wrap').textContent; return tx.includes('58') && tx.includes('55')`));
-    await setv('[name=note]', 'عدّ تاني ونقص 3'); await modalBtn(1); await sleep(600);
-    check('after approval the close is final with expected and difference', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='approved' && s.expectedCash===58 && s.diff===-3 && s.approvedBy==='Mona'`));
+    await setv('[name=note]', 'عدّ تاني ونقص 3'); await modalBtn(2);
+    // CI runners are slower than a dev machine: poll for the final state instead of one fixed sleep
+    let apv = null; for (let i = 0; i < 20; i++) { await sleep(300); apv = await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return {a:s.approval,e:s.expectedCash,d:s.diff,by:s.approvedBy,err:(document.querySelector('.modal-wrap .err')||{}).textContent||''}`); if (apv.a === 'approved') break; }
+    if (!apv || apv.a !== 'approved') console.log('APPROVE-DIAG', JSON.stringify(apv));
+    check('after approval the close is final with expected and difference', apv && apv.a === 'approved' && apv.e === 58 && apv.d === -3 && apv.by === 'Mona');
     await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`);
     await ev(`App.user=App._sys; shell(); Views.settings($('#main')); return 1`); await sleep(500);
     await ev(`document.getElementById('perm-card').scrollIntoView(); return 1`); await shot('41-permission-matrix-ar');
@@ -211,7 +216,7 @@ app.whenReady().then(async () => {
     await setv('.eq[data-i="0"]', 3); await setv('[name=reason]', 'العميل أخد 3'); await shot('42-edit-invoice-ar');
     await ev(`window.api.print=async()=>({ok:true}); return 1`);
     await modalBtn(1); await sleep(600);
-    const ed = await ev(`const s=App.db.sales.find(x=>x.id===App._editId); return {rev:s.rev, q:s.lines[0].qty, log:App.db.edits.length, html:receiptHTML(s,'ar').includes(t('rcRevised'))}`);
+    const ed = await ev(`const s=App.db.sales.find(x=>x.id===App._editId); return {rev:s.rev, q:s.lines[0].qty, log:App.db.edits.length, html:receiptHTML(s,'${EN ? 'en' : 'ar'}').includes(t('rcRevised'))}`);
     check('invoice edited as a revision; audit row; revised copy marked on the receipt', ed.rev === 1 && ed.q === 3 && ed.log === 1 && ed.html, JSON.stringify(ed));
     await ev(`Views.settings($('#main')); return 1`); await sleep(400); await ev(`[...document.querySelectorAll('#main .card h3')].find(h=>h.textContent.includes(t('editLog'))).scrollIntoView(); return 1`); await shot('43-edit-log-ar');
     // 10c. hardware: raster receipt to a fake network printer (ESC/POS decoder), drawer kick, test page, card reference
@@ -293,12 +298,58 @@ app.whenReady().then(async () => {
     check('under-payment: mascot points at the cash field in the pay window', await ev(`const g=document.querySelector('#guide'); const ring=document.querySelector('.gring'); const cs=document.querySelectorAll('[name=cash]'); const c=cs[cs.length-1]; if(!g||!ring||!c) return false; const r=ring.getBoundingClientRect(), b=c.getBoundingClientRect(); return g.getAttribute('data-guide')==='UNDERPAID' && Math.abs(r.left+r.width/2-(b.left+b.width/2))<6`)); await shot('72-guide-underpaid');
     await click('[data-g=x]'); await sleep(150); await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); App.cart=newCart(); Sell.renderCart(); return 1`);
     await click('#b-lang'); await sleep(300); await click('[data-nav=sell]'); await sleep(300); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(400); await shot('73-guide-empty-cart-en');
-    check('English text when the interface is English', await ev(`const g=document.querySelector('#guide'); return !!g && /empty/i.test(g.textContent)`)); await ev(`Guide.close(); return 1`);
+    check(EN ? 'Arabic text when the interface toggles to Arabic' : 'English text when the interface is English', await ev(EN ? `const g=document.querySelector('#guide'); return !!g && /[\u0600-\u06FF]/.test(g.textContent)` : `const g=document.querySelector('#guide'); return !!g && /empty/i.test(g.textContent)`)); await ev(`Guide.close(); return 1`);
     await click('#b-guide'); await sleep(150); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(300);
     check('guide can be switched off per user', await ev(`return App.user.guideOff===true && !document.querySelector('#guide')`)); await click('#b-guide'); await sleep(150);
     await ev(`App.user.guideOff=false; Guide.close(); toast('Printer not reachable','err'); return 1`); await sleep(700);
     check('any other error: the mascot appears too and points at the message', await ev(`const g=document.querySelector('#guide[data-guide=ERROR]'); return !!g && /Printer not reachable/.test(g.textContent) && !!document.querySelector('.gring')`)); await shot('74-guide-any-error'); await ev(`Guide.close(); return 1`);
     await click('#b-lang'); await sleep(300);
+    // 10g. new features: loyalty phone protection + manager override, provider tender (mock), ETA queue card, close recount flow
+    await ev(`App.db.settings.loyaltyEnabled=true; App.db.customers=App.db.customers||[]; const cu={id:Core.uid('cu'),no:'C-9001',name:'منى ولاء',phone:'01055551234',points:50}; App.db.customers.push(cu); window.__loyalCu=cu; const it=App.db.items.find(i=>i.barcode==='6221'); it.stock=99; App.user=App.db.users.find(u=>u.name==='Omar'); App.shift=Core.openShift(App.db,App.user,60); App.user.guideSeen=Object.assign({},App.user.guideSeen,{SHIFT_CLOSED:1}); await save(true); App.view='sell'; shell(); return 1`); await sleep(400);
+    // loyalty: redeem with the wrong phone is refused, manager PIN override completes and is recorded
+    await ev(`await Sell.submitQuery('6221'); App.cart.customerId=window.__loyalCu.id; Sell.renderCart(); return 1`); await sleep(200);
+    await click('[data-cart=pay]'); await sleep(400);
+    check('loyalty phone field appears on pay for a customer with a phone', await ev(`return !!document.querySelector('[name=lphone]')`));
+    await click('#redeem'); await sleep(500);
+    check('redeem reopens the pay window with points applied', await ev(`return !!document.querySelector('[name=lphone]') && document.querySelector('#redeem').checked`));
+    await setv('[name=lphone]', '01000000000'); await setv('[name=cash]', 500); await shot('80-pay-loyalty-phone-ar');
+    await modalBtn(1); await sleep(600);
+    check('wrong loyalty phone asks a manager PIN instead of selling', await ev(`return !!document.querySelector('#mapin')`)); await shot('81-loyalty-override-ar');
+    await setv('#mapin', '2222'); await modalBtn(1); await sleep(700);
+    check('manager override completes the sale and is recorded on it', await ev(`const s=App.db.sales.slice(-1)[0]; return s.loyaltyPhoneOverride==='Mona' && s.redeemValue>0`)); await shot('82-loyalty-sale-done-ar');
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); App.cart=newCart(); Sell.renderCart(); return 1`); await sleep(200);
+    // provider tender (mock): paymob amount opens the provider confirm, paid completes the sale, attempt used once
+    await ev(`await Sell.submitQuery('6221'); return 1`); await click('[data-cart=pay]'); await sleep(400);
+    await ev(`document.querySelector('[name=paymob]').value=Sell.calc().total; return 1`);
+    await modalBtn(1); await sleep(500);
+    check('provider confirm window appears for paymob', await ev(`const ws=document.querySelectorAll('.modal-wrap'); const w=ws[ws.length-1]; return !!w && w.textContent.includes('Paymob')`)); await shot('83-provider-confirm-ar');
+    await modalBtn(1); await sleep(700);
+    check('provider sale completed with a paid, single-use attempt', await ev(`const a=App.db.paymentAttempts.slice(-1)[0]; const s=App.db.sales.slice(-1)[0]; return a.state==='paid' && a.usedIn && s.payments.some(p=>p.method==='paymob')`));
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`); await sleep(150);
+    // ETA queue card on the shift screen (managers only)
+    await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    check('every sale queued an ETA receipt with a 64-char fingerprint', await ev(`return App.db.etaReceipts.length>=2 && App.db.etaReceipts.every(r=>r.state==='queued' && /^[0-9a-f]{64}$/.test(r.uuid))`));
+    await ev(`const b=document.querySelector('[data-eta-all]'); if(b) b.scrollIntoView(); return 1`); await sleep(250); await shot('84-eta-card-ar');
+    await click('[data-eta-all]'); await sleep(500);
+    check('send-all submits every queued ETA receipt', await ev(`return App.db.etaReceipts.length>0 && App.db.etaReceipts.every(r=>r.state!=='queued')`));
+    // recount flow: cashier blind-closes, manager sends back, cashier recounts, manager approves
+    await ev(`const omar=App.db.users.find(u=>u.name==='Omar'); App.user=omar; App.shift=App.db.shifts.find(s=>!s.closedAt && s.userId===omar.id); await save(true); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    await click('#sh-close'); await sleep(300); await setv('[name=counted]', 95); await modalBtn(1); await sleep(500);
+    check('second blind close saved as pending', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='pending'`));
+    await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; window.__exp=Core.pendingCloseView(App.db,s).expectedCash; return 1`);
+    await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    await click('[data-ap]'); await sleep(400); await shot('85-manager-sendback-ar');
+    await setv('[name=note]', 'أعد العد من فضلك'); await modalBtn(1); await sleep(500);
+    check('manager sent the close back for recount with a note', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='recount' && s.recountNote.includes('أعد العد')`));
+    await ev(`App.user=App.db.users.find(u=>u.name==='Omar'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    check('cashier sees the recount button on his own sent-back close', await ev(`return !!document.querySelector('[data-rc]')`)); await shot('86-recount-btn-ar');
+    await click('[data-rc]'); await sleep(300); await shot('87-recount-modal-ar');
+    await ev(`document.querySelector('[name=counted]').value=String(window.__exp); return 1`); await setv('[name=note]', 'عديت تاني، كامل'); await modalBtn(1); await sleep(500);
+    check('recount resubmits the close as pending with the new count', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='pending' && s.countedCash===window.__exp`));
+    await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    await click('[data-ap]'); await sleep(400); await modalBtn(2); await sleep(600);
+    check('after recount the close is approved with zero difference', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='approved' && s.diff===0 && s.approvedBy==='Mona'`));
+    await ev(`App.user=App._sys; App.shift=App.db.shifts.find(s=>!s.closedAt); shell(); return 1`); await sleep(300);
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
     const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);
