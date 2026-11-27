@@ -297,6 +297,52 @@ app.whenReady().then(async () => {
     await click('#b-guide'); await sleep(150); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(300);
     check('guide can be switched off per user', await ev(`return App.user.guideOff===true && !document.querySelector('#guide')`)); await click('#b-guide'); await sleep(150);
     await click('#b-lang'); await sleep(300);
+    // 10g. new features: loyalty phone protection + manager override, provider tender (mock), ETA queue card, close recount flow
+    await ev(`App.db.settings.loyaltyEnabled=true; App.db.customers=App.db.customers||[]; const cu={id:Core.uid('cu'),no:'C-9001',name:'منى ولاء',phone:'01055551234',points:50}; App.db.customers.push(cu); window.__loyalCu=cu; const it=App.db.items.find(i=>i.barcode==='6221'); it.stock=99; App.user=App.db.users.find(u=>u.name==='Omar'); App.shift=Core.openShift(App.db,App.user,60); App.user.guideSeen=Object.assign({},App.user.guideSeen,{SHIFT_CLOSED:1}); await save(true); App.view='sell'; shell(); return 1`); await sleep(400);
+    // loyalty: redeem with the wrong phone is refused, manager PIN override completes and is recorded
+    await ev(`await Sell.submitQuery('6221'); App.cart.customerId=window.__loyalCu.id; Sell.renderCart(); return 1`); await sleep(200);
+    await click('[data-cart=pay]'); await sleep(400);
+    check('loyalty phone field appears on pay for a customer with a phone', await ev(`return !!document.querySelector('[name=lphone]')`));
+    await click('#redeem'); await sleep(500);
+    check('redeem reopens the pay window with points applied', await ev(`return !!document.querySelector('[name=lphone]') && document.querySelector('#redeem').checked`));
+    await setv('[name=lphone]', '01000000000'); await setv('[name=cash]', 500); await shot('80-pay-loyalty-phone-ar');
+    await modalBtn(1); await sleep(600);
+    check('wrong loyalty phone asks a manager PIN instead of selling', await ev(`return !!document.querySelector('#mapin')`)); await shot('81-loyalty-override-ar');
+    await setv('#mapin', '2222'); await modalBtn(1); await sleep(700);
+    check('manager override completes the sale and is recorded on it', await ev(`const s=App.db.sales.slice(-1)[0]; return s.loyaltyPhoneOverride==='Mona' && s.redeemValue>0`)); await shot('82-loyalty-sale-done-ar');
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); App.cart=newCart(); Sell.renderCart(); return 1`); await sleep(200);
+    // provider tender (mock): paymob amount opens the provider confirm, paid completes the sale, attempt used once
+    await ev(`await Sell.submitQuery('6221'); return 1`); await click('[data-cart=pay]'); await sleep(400);
+    await ev(`document.querySelector('[name=paymob]').value=Sell.calc().total; return 1`);
+    await modalBtn(1); await sleep(500);
+    check('provider confirm window appears for paymob', await ev(`const ws=document.querySelectorAll('.modal-wrap'); const w=ws[ws.length-1]; return !!w && w.textContent.includes('Paymob')`)); await shot('83-provider-confirm-ar');
+    await modalBtn(1); await sleep(700);
+    check('provider sale completed with a paid, single-use attempt', await ev(`const a=App.db.paymentAttempts.slice(-1)[0]; const s=App.db.sales.slice(-1)[0]; return a.state==='paid' && a.usedIn && s.payments.some(p=>p.method==='paymob')`));
+    await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); return 1`); await sleep(150);
+    // ETA queue card on the shift screen (managers only)
+    await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    check('every sale queued an ETA receipt with a 64-char fingerprint', await ev(`return App.db.etaReceipts.length>=2 && App.db.etaReceipts.every(r=>r.state==='queued' && /^[0-9a-f]{64}$/.test(r.uuid))`));
+    await ev(`const b=document.querySelector('[data-eta-all]'); if(b) b.scrollIntoView(); return 1`); await sleep(250); await shot('84-eta-card-ar');
+    await click('[data-eta-all]'); await sleep(500);
+    check('send-all submits every queued ETA receipt', await ev(`return App.db.etaReceipts.length>0 && App.db.etaReceipts.every(r=>r.state!=='queued')`));
+    // recount flow: cashier blind-closes, manager sends back, cashier recounts, manager approves
+    await ev(`const omar=App.db.users.find(u=>u.name==='Omar'); App.user=omar; App.shift=App.db.shifts.find(s=>!s.closedAt && s.userId===omar.id); await save(true); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    await click('#sh-close'); await sleep(300); await setv('[name=counted]', 95); await modalBtn(1); await sleep(500);
+    check('second blind close saved as pending', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='pending'`));
+    await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; window.__exp=Core.pendingCloseView(App.db,s).expectedCash; return 1`);
+    await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    await click('[data-ap]'); await sleep(400); await shot('85-manager-sendback-ar');
+    await setv('[name=note]', 'أعد العد من فضلك'); await modalBtn(1); await sleep(500);
+    check('manager sent the close back for recount with a note', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='recount' && s.recountNote.includes('أعد العد')`));
+    await ev(`App.user=App.db.users.find(u=>u.name==='Omar'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    check('cashier sees the recount button on his own sent-back close', await ev(`return !!document.querySelector('[data-rc]')`)); await shot('86-recount-btn-ar');
+    await click('[data-rc]'); await sleep(300); await shot('87-recount-modal-ar');
+    await ev(`document.querySelector('[name=counted]').value=String(window.__exp); return 1`); await setv('[name=note]', 'عديت تاني، كامل'); await modalBtn(1); await sleep(500);
+    check('recount resubmits the close as pending with the new count', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='pending' && s.countedCash===window.__exp`));
+    await ev(`App.user=App.db.users.find(u=>u.name==='Mona'); shell(); Views.shift($('#main')); return 1`); await sleep(400);
+    await click('[data-ap]'); await sleep(400); await modalBtn(2); await sleep(600);
+    check('after recount the close is approved with zero difference', await ev(`const s=App.db.shifts.filter(x=>x.userName==='Omar').slice(-1)[0]; return s.approval==='approved' && s.diff===0 && s.approvedBy==='Mona'`));
+    await ev(`App.user=App._sys; App.shift=App.db.shifts.find(s=>!s.closedAt); shell(); return 1`); await sleep(300);
     // 11. persistence: data file on disk has the data
     await ev(`await save(true); return 1`); await sleep(300);
     const loaded = JSON.parse(await ev(`return await window.api.load()`)); check('data persisted in the SQLite store and reloads', loaded.sales.length >= 2 && loaded.items.length >= 4);
