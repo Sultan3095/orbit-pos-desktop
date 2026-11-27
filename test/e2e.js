@@ -3,6 +3,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('fs'); const os = require('os'); const path = require('path');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-e2e-')); process.env.ORBIT_USER_DATA = tmp;
 const OUT = process.env.E2E_OUT || path.join(tmp, 'shots'); fs.mkdirSync(OUT, { recursive: true });
+const EN = process.env.E2E_LANG === 'en'; // capture pass language: default Arabic, E2E_LANG=en for the English set
 app.commandLine.appendSwitch('no-sandbox'); app.commandLine.appendSwitch('disable-gpu');
 require('../main.js');
 let importRows = null; const printed = [];
@@ -39,6 +40,7 @@ app.whenReady().then(async () => {
     // login
     await click('[data-u]'); await setv('#pin', '1234'); await click('#pin-go'); await sleep(400);
     check('logged in, sell view', await ev(`return !!document.querySelector('.sell') && App.user.name==='مدير'`));
+    if (EN) { await ev(`App.db.settings.lang='en'; applyTheme(); shell(); return 1`); await sleep(400); }
     await shot('02-sell-empty-ar');
     // 2. add items via UI
     await click('[data-nav=items]'); await sleep(600);
@@ -105,7 +107,7 @@ app.whenReady().then(async () => {
     check('receipt EN ltr + English item name', en.includes('dir="ltr"') && en.includes('Sales invoice') && en.includes('Chips'));
     fs.writeFileSync(path.join(OUT, 'receipt-ar.html'), ar); fs.writeFileSync(path.join(OUT, 'receipt-en.html'), en);
     // 10. switch UI to English + dark + blue
-    await click('#b-lang'); await sleep(300); check('UI switched to LTR/EN', await ev(`return document.documentElement.dir==='ltr' && document.querySelector('.nav.on').textContent.includes('Reports')`));
+    await click('#b-lang'); await sleep(300); check(EN ? 'UI switched to RTL/AR' : 'UI switched to LTR/EN', await ev(EN ? `return document.documentElement.dir==='rtl' && document.querySelector('.nav.on').textContent.includes('تقارير')` : `return document.documentElement.dir==='ltr' && document.querySelector('.nav.on').textContent.includes('Reports')`));
     await click('[data-nav=sell]'); await sleep(200); await shot('15-sell-en-light');
     check('default theme is the brand theme', await ev(`return document.documentElement.getAttribute('data-theme')==='brand'`));
     await shot('16-sell-en-brand');
@@ -120,7 +122,7 @@ app.whenReady().then(async () => {
     await click('[data-nav=settings]'); await sleep(300); await shot('18-settings-en-brand');
 
     // 12. cashier flow: approval above max discount, hold/resume, serial item, weighed item via scale barcode
-    await ev(`App.db.users.push(Core.makeUser('Sara','1111','cashier')); App.db.items.push({id:'sn1',barcode:'8001',name:'Phone',nameEn:'Phone',group:'Electronics',cost:100,price:200,stock:2,minStock:1,serialTracked:true,serials:['IMEI1','IMEI2'],batches:[],created:'2026-01-01T00:00:00Z'},{id:'wt1',barcode:'123',plu:'123',name:'Tomatoes',nameEn:'Tomatoes',group:'Veg',cost:10,price:20,stock:50,minStock:1,byWeight:true,batches:[],serials:[],created:'2026-01-01T00:00:00Z'}); App.db.settings.lang='ar'; applyTheme(); login(); return 1`);
+    await ev(`App.db.users.push(Core.makeUser('Sara','1111','cashier')); App.db.items.push({id:'sn1',barcode:'8001',name:'Phone',nameEn:'Phone',group:'Electronics',cost:100,price:200,stock:2,minStock:1,serialTracked:true,serials:['IMEI1','IMEI2'],batches:[],created:'2026-01-01T00:00:00Z'},{id:'wt1',barcode:'123',plu:'123',name:'Tomatoes',nameEn:'Tomatoes',group:'Veg',cost:10,price:20,stock:50,minStock:1,byWeight:true,batches:[],serials:[],created:'2026-01-01T00:00:00Z'}); App.db.settings.lang='${EN ? 'en' : 'ar'}'; applyTheme(); login(); return 1`);
     await sleep(300); await ev(`[...document.querySelectorAll('[data-u]')].find(b=>b.textContent.includes('Sara')).click()`); await setv('#pin', '1111'); await click('#pin-go'); await sleep(300);
     check('cashier cannot see manager screens', await ev(`return !document.querySelector('[data-nav=settings]') && !!document.querySelector('[data-nav=sell]')`));
     await click('[data-nav=shift]'); await sleep(150); await click('#sh-open'); await sleep(150); await setv('[name=cash]', 50); await modalBtn(1); await sleep(200); await click('[data-nav=sell]'); await sleep(200);
@@ -211,7 +213,7 @@ app.whenReady().then(async () => {
     await setv('.eq[data-i="0"]', 3); await setv('[name=reason]', 'العميل أخد 3'); await shot('42-edit-invoice-ar');
     await ev(`window.api.print=async()=>({ok:true}); return 1`);
     await modalBtn(1); await sleep(600);
-    const ed = await ev(`const s=App.db.sales.find(x=>x.id===App._editId); return {rev:s.rev, q:s.lines[0].qty, log:App.db.edits.length, html:receiptHTML(s,'ar').includes(t('rcRevised'))}`);
+    const ed = await ev(`const s=App.db.sales.find(x=>x.id===App._editId); return {rev:s.rev, q:s.lines[0].qty, log:App.db.edits.length, html:receiptHTML(s,'${EN ? 'en' : 'ar'}').includes(t('rcRevised'))}`);
     check('invoice edited as a revision; audit row; revised copy marked on the receipt', ed.rev === 1 && ed.q === 3 && ed.log === 1 && ed.html, JSON.stringify(ed));
     await ev(`Views.settings($('#main')); return 1`); await sleep(400); await ev(`[...document.querySelectorAll('#main .card h3')].find(h=>h.textContent.includes(t('editLog'))).scrollIntoView(); return 1`); await shot('43-edit-log-ar');
     // 10c. hardware: raster receipt to a fake network printer (ESC/POS decoder), drawer kick, test page, card reference
@@ -293,7 +295,7 @@ app.whenReady().then(async () => {
     check('under-payment: mascot points at the cash field in the pay window', await ev(`const g=document.querySelector('#guide'); const ring=document.querySelector('.gring'); const cs=document.querySelectorAll('[name=cash]'); const c=cs[cs.length-1]; if(!g||!ring||!c) return false; const r=ring.getBoundingClientRect(), b=c.getBoundingClientRect(); return g.getAttribute('data-guide')==='UNDERPAID' && Math.abs(r.left+r.width/2-(b.left+b.width/2))<6`)); await shot('72-guide-underpaid');
     await click('[data-g=x]'); await sleep(150); await ev(`document.querySelectorAll('.modal-wrap').forEach(m=>m.remove()); App.cart=newCart(); Sell.renderCart(); return 1`);
     await click('#b-lang'); await sleep(300); await click('[data-nav=sell]'); await sleep(300); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(400); await shot('73-guide-empty-cart-en');
-    check('English text when the interface is English', await ev(`const g=document.querySelector('#guide'); return !!g && /empty/i.test(g.textContent)`)); await ev(`Guide.close(); return 1`);
+    check(EN ? 'Arabic text when the interface toggles to Arabic' : 'English text when the interface is English', await ev(EN ? `const g=document.querySelector('#guide'); return !!g && /[\u0600-\u06FF]/.test(g.textContent)` : `const g=document.querySelector('#guide'); return !!g && /empty/i.test(g.textContent)`)); await ev(`Guide.close(); return 1`);
     await click('#b-guide'); await sleep(150); await ev(`App.user.guideSeen={}; return 1`); await click('[data-cart=pay]'); await sleep(300);
     check('guide can be switched off per user', await ev(`return App.user.guideOff===true && !document.querySelector('#guide')`)); await click('#b-guide'); await sleep(150);
     await click('#b-lang'); await sleep(300);
